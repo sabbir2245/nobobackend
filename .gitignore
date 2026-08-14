@@ -1,0 +1,41 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# --- Virtualenv ---
+.venv/
+venv/
+env/
+
+# --- Secrets / environment ---
+.env
+.env.local
+
+# --- Django ---
+db.sqlite3
+*.sqlite3
+staticfiles/
+/media/
+
+# --- Runtime media uploads (keep the timage source assets, ignore the upload dirs) ---
+timage/post_images/
+timage/review_images/
+
+# --- Generated settlement ledger ---
+settlements/*.xlsx
+!settlements/.gitkeep
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log
+nohup.out
