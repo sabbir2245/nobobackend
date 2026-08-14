@@ -1,0 +1,14 @@
+[Unit]
+Description=Gunicorn instance to serve Nobanno
+After=network.target
+
+[Service]
+User=s
+Group=s
+WorkingDirectory=/home/s/codes/nobobackend
+EnvironmentFile=/home/s/codes/nobobackend/.env
+ExecStart=/home/s/codes/nobobackend/.venv/bin/gunicorn --workers 3 --bind 127.0.0.1:8000 nobanno.wsgi:application
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

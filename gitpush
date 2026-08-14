@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Stage all changes and push to remote with a commit message.
+# Usage:
+#   ./gitpush "your commit message"
+set -euo pipefail
+
+MSG="${1:-}"
+if [ -z "$MSG" ]; then
+  echo "Error: commit message is required."
+  echo "Usage: $0 \"your commit message\""
+  exit 1
+fi
+
+git add -A
+if [ -z "$(git status --porcelain)" ]; then
+  echo "Nothing to commit — working tree is clean."
+  exit 0
+fi
+
+git commit -m "$MSG"
+git push
+echo "Pushed successfully."

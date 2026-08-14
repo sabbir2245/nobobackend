@@ -59,7 +59,7 @@ ROOT_URLCONF = 'nobanno.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [str(BASE_DIR / 'nobanno' / 'templates')],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -108,6 +108,7 @@ USE_TZ = True
 
 # Static files (CSS, JavaScript)
 STATIC_URL = 'static/'
+STATIC_ROOT = os.environ.get('STATIC_ROOT', str(BASE_DIR / 'staticfiles'))
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -175,7 +176,7 @@ CLOUDFLARE_TUNNEL_URL = os.environ.get('CLOUDFLARE_TUNNEL_URL')
 
 # Media configuration
 MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'timage'
+MEDIA_ROOT = os.environ.get('MEDIA_ROOT', str(BASE_DIR / 'timage'))
 
 # Settlement xlsx ledger (appended when a customer payment is marked successful)
 SETTLEMENT_XLSX_PATH = BASE_DIR / 'settlements' / 'admin_settlement.xlsx'
