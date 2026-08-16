@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
+from django.utils.safestring import mark_safe
 from django.db.models import Sum, Count
 from django.shortcuts import render
 from django.urls import path
@@ -37,10 +38,33 @@ class PostImageInline(admin.TabularInline):
 
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
-    list_display = ('title', 'farmer', 'product_type', 'total_weight_kg', 'price_per_kg', 'created_at')
+    list_display = ('thumbnail', 'title', 'farmer', 'product_type', 'total_weight_kg',
+                    'price_per_kg', 'status', 'created_at')
     list_filter = ('product_type', 'created_at')
-    search_fields = ('title', 'farmer__username')
+    search_fields = ('title', 'description', 'farmer__username', 'farmer__name',
+                     'product_type__name_en', 'product_type__name_bn')
+    list_per_page = 25
+    readonly_fields = ('created_at', 'updated_at')
     inlines = [PostImageInline]
+    actions = ['delete_selected_posts']
+
+    @admin.display(description='Image', ordering='image')
+    def thumbnail(self, obj):
+        url = obj.image.url if obj.image else ''
+        if not url:
+            return '-'
+        return mark_safe(f'<img src="{url}" style="height:48px;width:auto;border-radius:4px;">')
+
+    @admin.display(description='Status')
+    def status(self, obj):
+        return 'Active' if obj.total_weight_kg and obj.total_weight_kg > 0 else 'Sold out'
+
+    @admin.action(description='Delete selected posts')
+    def delete_selected_posts(self, request, queryset):
+        from django.contrib import messages
+        count = queryset.count()
+        queryset.delete()
+        self.message_user(request, f'Deleted {count} post(s).', messages.SUCCESS)
 
 
 @admin.register(Order)

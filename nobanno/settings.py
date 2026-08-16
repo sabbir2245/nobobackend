@@ -181,6 +181,10 @@ MEDIA_ROOT = os.environ.get('MEDIA_ROOT', str(BASE_DIR / 'timage'))
 # Settlement xlsx ledger (appended when a customer payment is marked successful)
 SETTLEMENT_XLSX_PATH = BASE_DIR / 'settlements' / 'admin_settlement.xlsx'
 
+# ── CORPnet Bulk Payment ─────────────────────────────────────────────────
+# 16-digit BRAC Bank corporate (debit) account used for every bulk payout.
+CORPNET_DEBIT_ACCOUNT = os.environ.get('CORPNET_DEBIT_ACCOUNT', '0000000000000000')
+
 # ── Jazzmin Admin Theme ───────────────────────────────────────────────────
 
 JAZZMIN_SETTINGS = {

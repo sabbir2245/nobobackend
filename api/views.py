@@ -342,7 +342,7 @@ class ReviewViewSet(viewsets.ModelViewSet):
         queryset = self.filter_queryset(self.get_queryset())
         farmer_id = request.query_params.get('farmer_id')
         if farmer_id:
-            queryset = queryset.filter(post__farmer_id=farmer_id)
+            queryset = queryset.filter(farmer_id=farmer_id)
         post_id = request.query_params.get('post_id')
         if post_id:
             queryset = queryset.filter(post_id=post_id)
@@ -351,6 +351,17 @@ class ReviewViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(customer_id=customer_id)
 
         serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+
+class FarmerProfileView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, pk):
+        farmer = User.objects.filter(id=pk, role='farmer').first()
+        if farmer is None:
+            return Response({"detail": "Farmer not found."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = UserSerializer(farmer, context={'request': request})
         return Response(serializer.data)
 
 

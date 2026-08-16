@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 import openpyxl
+from openpyxl.utils import get_column_letter
 
 from django.conf import settings
 from django.http import HttpResponse
@@ -531,27 +532,55 @@ class BKashPaymentRefundView(APIView):
 
 
 # =============================================================================
-# BEFTN CSV GENERATION — Leg 2 (Admin → Farmer bank settlement)
+# CORPNET BULK PAYMENT XLSX — Leg 2 (Admin → Farmer bank settlement)
 # =============================================================================
-# Generates a CSV file for BEFTN batch payment processing.
+# Generates an XLSX file in BRAC Bank CORPnet bulk payment format.
 # =============================================================================
 
 import csv
 import io
 from .models import Order, FarmerBankAccount
 
+# CORPnet bulk payment file format (see docs):
+#   Debit Account | Beneficiary Name | Beneficiary Account | Routing Number |
+#   Bank Name & Branch | Amount | Payment Mode | Narration / Remarks
+CORPNET_HEADERS = [
+    "Debit Account",
+    "Beneficiary Name",
+    "Beneficiary Account",
+    "Routing Number",
+    "Bank Name & Branch",
+    "Amount (BDT)",
+    "Payment Mode",
+    "Narration / Remarks",
+]
+
+
+def _resolve_payment_mode(bank):
+    """Pick the CORPnet Payment Mode from the farmer's bank record.
+    Explicit mode wins; otherwise auto-detect: BRAC→IFT, bKash→MFS, else EFT."""
+    if bank.payment_mode:
+        return bank.payment_mode
+    bname = (bank.bank_name or '').strip().lower()
+    if 'brac' in bname:
+        return 'IFT'
+    if 'bkash' in bname or 'mfs' in bname:
+        return 'MFS'
+    return 'EFT'
+
+
 class BEFTNInvoiceView(APIView):
     """
     GET /api/payments/beftn/invoice/?from_date=2026-01-01&to_date=2026-07-25
-    Admin-only. Generates a BEFTN-format CSV of completed/shipped orders.
-    
-    Each row = one order (fully traceable). Summary total at bottom.
+    Admin-only. Generates a CORPnet bulk-payment XLSX of completed/shipped orders.
+
+    Each row = one order (fully traceable), matching the CORPnet bulk file layout.
     Skips farmers without complete bank details (flags them).
     """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        print(f"[BEFTN] Generating invoice, user={request.user.id}, role={request.user.role}")
+        print(f"[BEFTN] Generating CORPnet invoice, user={request.user.id}, role={request.user.role}")
 
         if request.user.role != "admin" and not request.user.is_staff:
             return Response({"error": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
@@ -585,13 +614,12 @@ class BEFTNInvoiceView(APIView):
 
         print(f"[BEFTN] Found {orders.count()} orders to process")
 
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow([
-            "SL", "Order_ID", "Farmer_Name", "Bank_Name", "Branch_Name",
-            "Routing_Number", "Account_Number", "Account_Type",
-            "Mobile_Number", "Amount_BDT", "Order_Date", "Remarks"
-        ])
+        debit_account = getattr(settings, 'CORPNET_DEBIT_ACCOUNT', '0000000000000000')
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "CORPnet Bulk"
+        ws.append(CORPNET_HEADERS)
 
         sl = 0
         total_amount = Decimal("0.00")
@@ -617,39 +645,47 @@ class BEFTNInvoiceView(APIView):
             if order.post.product_type:
                 remarks = f"{order.post.product_type.name_en} {order.quantity_kg}kg"
 
-            writer.writerow([
-                sl,
-                f"ORD-{order.id}",
+            bank_branch = f"{bank.bank_name} - {bank.branch_name}".strip(" -")
+            mode = _resolve_payment_mode(bank)
+
+            ws.append([
+                debit_account,
                 farmer.name or farmer.username,
-                bank.bank_name,
-                bank.branch_name,
-                bank.routing_number,
                 bank.account_number,
-                bank.get_account_type_display(),
-                bank.mobile_number,
-                f"{amount:.2f}",
-                order.created_at.strftime("%Y-%m-%d"),
+                bank.routing_number,
+                bank_branch,
+                float(amount),
+                mode,
                 remarks,
             ])
             total_amount += amount
 
-        # Summary row
+        # Summary row (blank cells, TOTAL under Amount)
         if sl > 0:
-            writer.writerow([
-                "", "", "", "", "", "", "", "", "", "TOTAL", f"{total_amount:.2f}", ""
+            ws.append([
+                "", "", "", "", "TOTAL", float(total_amount), "", "",
             ])
 
-        csv_content = output.getvalue()
-        output.close()
+        # Column widths for readability
+        widths = [18, 24, 24, 16, 34, 14, 14, 34]
+        for i, w in enumerate(widths, start=1):
+            ws.column_dimensions[get_column_letter(i)].width = w
 
-        print(f"[BEFTN] Generated CSV with {sl} entries, total BDT {total_amount:.2f}")
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        print(f"[BEFTN] Generated CORPnet xlsx with {sl} entries, total BDT {total_amount:.2f}")
         if incomplete_farmers:
             print(f"[BEFTN] WARNING: {len(incomplete_farmers)} orders skipped due to incomplete farmer bank details:")
             for f in incomplete_farmers:
                 print(f"[BEFTN]   - Farmer #{f['farmer_id']} ({f['farmer_name']}): Order #{f['order_id']} - {f['reason']}")
 
-        response = HttpResponse(csv_content, content_type="text/csv")
-        response["Content-Disposition"] = f'attachment; filename="beftn_invoice_{datetime.now().strftime("%Y%m%d")}.csv"'
+        response = HttpResponse(
+            output.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response["Content-Disposition"] = f'attachment; filename="corpnet_bulk_{datetime.now().strftime("%Y%m%d")}.xlsx"'
         return response
 
 
@@ -660,14 +696,7 @@ class BEFTNInvoiceView(APIView):
 #          Reference (Order ID), Contact (Phone)
 # =============================================================================
 
-SETTLEMENT_HEADERS = [
-    "Account Number",
-    "Farmer Name",
-    "Amount (90%)",
-    "Payment Type",
-    "Reference (Order ID)",
-    "Contact (Phone)",
-]
+SETTLEMENT_HEADERS = CORPNET_HEADERS
 
 
 def _settlement_path():
@@ -684,6 +713,7 @@ def _rebuild_settlement_xlsx():
     from .models import Payment, Order
     path = _settlement_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    debit_account = getattr(settings, 'CORPNET_DEBIT_ACCOUNT', '0000000000000000')
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -708,12 +738,14 @@ def _rebuild_settlement_xlsx():
         except FarmerBankAccount.DoesNotExist:
             pass
         ws.append([
-            bank.account_number if bank else '',
+            debit_account,
             farmer.name or farmer.username,
+            bank.account_number if bank else '',
+            bank.routing_number if bank else '',
+            f"{bank.bank_name} - {bank.branch_name}".strip(" -") if bank else '',
             float(order.farmer_payout),
-            (payment.gateway or 'bkash').upper(),
-            order.id,
-            farmer.phone_number or '',
+            _resolve_payment_mode(bank) if bank else 'EFT',
+            f"Order #{order.id}",
         ])
 
     wb.save(path)
@@ -739,6 +771,7 @@ def _append_settlement_xlsx(payment):
 
     path = _settlement_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    debit_account = getattr(settings, 'CORPNET_DEBIT_ACCOUNT', '0000000000000000')
 
     if path.exists():
         wb = openpyxl.load_workbook(path)
@@ -750,12 +783,14 @@ def _append_settlement_xlsx(payment):
         ws.append(SETTLEMENT_HEADERS)
 
     ws.append([
-        bank.account_number if bank else '',
+        debit_account,
         farmer.name or farmer.username,
+        bank.account_number if bank else '',
+        bank.routing_number if bank else '',
+        f"{bank.bank_name} - {bank.branch_name}".strip(" -") if bank else '',
         float(order.farmer_payout),
-        (payment.gateway or 'bkash').upper(),
-        order.id,
-        farmer.phone_number or '',
+        _resolve_payment_mode(bank) if bank else 'EFT',
+        f"Order #{order.id}",
     ])
     wb.save(path)
     return True

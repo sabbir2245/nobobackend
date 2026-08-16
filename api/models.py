@@ -119,7 +119,9 @@ class Order(models.Model):
 
 class Review(models.Model):
     customer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='given_reviews', limit_choices_to={'role': 'customer'})
-    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name='reviews')
+    post = models.ForeignKey(Post, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviews')
+    farmer = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviews', limit_choices_to={'role': 'farmer'})
+    post_title = models.CharField(max_length=255, blank=True, default='')
     rating = models.IntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)])
     comment = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -129,7 +131,9 @@ class Review(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f"Review by {self.customer.username} on {self.post.title} - {self.rating} stars"
+        if self.post:
+            return f"Review by {self.customer.username} on {self.post.title} - {self.rating} stars"
+        return f"Review by {self.customer.username} on {self.post_title or '(deleted post)'} - {self.rating} stars"
 
 
 class ReviewImage(models.Model):
@@ -204,12 +208,19 @@ class FarmerBankAccount(models.Model):
         ('savings', 'Savings'),
         ('current', 'Current'),
     )
+    PAYMENT_MODE_CHOICES = (
+        ('IFT', 'IFT (BRAC to BRAC)'),
+        ('EFT', 'EFT (Inter-bank)'),
+        ('RTGS', 'RTGS (Urgent Inter-bank)'),
+        ('MFS', 'MFS (bKash / Mobile)'),
+    )
     farmer = models.OneToOneField(User, on_delete=models.CASCADE, related_name='bank_account', limit_choices_to={'role': 'farmer'})
     bank_name = models.CharField(max_length=200)
     branch_name = models.CharField(max_length=200)
     routing_number = models.CharField(max_length=20)
     account_number = models.CharField(max_length=50)
     account_type = models.CharField(max_length=10, choices=ACCOUNT_TYPE_CHOICES, default='savings')
+    payment_mode = models.CharField(max_length=10, choices=PAYMENT_MODE_CHOICES, default='EFT')
     mobile_number = models.CharField(max_length=15)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

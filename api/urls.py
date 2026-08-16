@@ -5,6 +5,7 @@ from .views import (
     RegisterView, CustomLoginView, LogoutView, UserProfileView,
     UserManagementViewSet, PostViewSet, OrderViewSet,
     ReviewViewSet, FarmerWalletView, AdminAnalyticsView,
+    FarmerProfileView,
     ProductTypeViewSet,
     BangladeshLocationView, AssignServiceAreaView,
     AreaViewSet, BatchViewSet, DemoPayView,
@@ -43,6 +44,7 @@ urlpatterns = [
     # Custom dashboards
     path('farmer/wallet/', FarmerWalletView.as_view(), name='farmer-wallet'),
     path('admin/analytics/', AdminAnalyticsView.as_view(), name='admin-analytics'),
+    path('farmers/<int:pk>/', FarmerProfileView.as_view(), name='farmer-profile'),
 
     path('profile/update/', UserUpdateView.as_view(), name='profile-update'),
     path('posts/<int:pk>/update/', PostUpdateView.as_view(), name='post-update'),

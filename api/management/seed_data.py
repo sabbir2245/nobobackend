@@ -353,16 +353,17 @@ class Command(BaseCommand):
         # ==========================================
         self.stdout.write("Creating farmer bank accounts...")
         bank_data = [
-            (f1, 'BRAC Bank', 'Savar', '020271634', '1571100001234567', 'savings', '01712345678'),
-            (f2, 'Dutch-Bangla Bank', 'Sherpur', '090970641', '1781100002345678', 'current', '01812345678'),
-            (f3, 'Islami Bank', 'Paba', '040111111', '2051100003456789', 'savings', '01612345678'),
-            (f4, 'Sonali Bank', 'Sharsha', '260221021', '1631100004567890', 'savings', '01512345678'),
-            (f5, 'Agrani Bank', 'Nangalkot', '190224431', '1161100005678901', 'current', '01998765432'),
+            (f1, 'BRAC Bank', 'Savar', '020271634', '1571100001234567', 'savings', 'IFT', '01712345678'),
+            (f2, 'Dutch-Bangla Bank', 'Sherpur', '090970641', '1781100002345678', 'current', 'EFT', '01812345678'),
+            (f3, 'Islami Bank', 'Paba', '040111111', '2051100003456789', 'savings', 'EFT', '01612345678'),
+            (f4, 'bKash', 'Mobile Money', '000000000', '01723456789', 'savings', 'MFS', '01723456789'),
+            (f5, 'Agrani Bank', 'Nangalkot', '190224431', '1161100005678901', 'current', 'RTGS', '01998765432'),
         ]
-        for farmer, bank, branch, rt, acct, atype, mob in bank_data:
+        for farmer, bank, branch, rt, acct, atype, mode, mob in bank_data:
             FarmerBankAccount.objects.create(
                 farmer=farmer, bank_name=bank, branch_name=branch,
-                routing_number=rt, account_number=acct, account_type=atype, mobile_number=mob)
+                routing_number=rt, account_number=acct, account_type=atype,
+                payment_mode=mode, mobile_number=mob)
 
         # ==========================================
         # ORDERS — feed pools → build batches across every lifecycle state

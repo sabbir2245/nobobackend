@@ -403,9 +403,9 @@ class ReviewImageSerializer(serializers.ModelSerializer):
 class ReviewSerializer(serializers.ModelSerializer):
     customer_username = serializers.ReadOnlyField(source='customer.username')
     customer_name = serializers.SerializerMethodField()
-    post_title = serializers.ReadOnlyField(source='post.title')
-    farmer_username = serializers.ReadOnlyField(source='post.farmer.username')
-    farmer_id = serializers.ReadOnlyField(source='post.farmer.id')
+    post_title = serializers.SerializerMethodField()
+    farmer_username = serializers.SerializerMethodField()
+    farmer_id = serializers.SerializerMethodField()
     images = ReviewImageSerializer(many=True, read_only=True)
 
     def get_customer_name(self, obj):
@@ -414,10 +414,31 @@ class ReviewSerializer(serializers.ModelSerializer):
             return None
         return obj.customer.name
 
+    def get_post_title(self, obj):
+        if obj.post:
+            return obj.post.title
+        return obj.post_title
+
+    def get_farmer_username(self, obj):
+        if obj.farmer:
+            return obj.farmer.username
+        return None
+
+    def get_farmer_id(self, obj):
+        if obj.farmer:
+            return obj.farmer.id
+        return None
+
     class Meta:
         model = Review
         fields = '__all__'
         read_only_fields = ('customer',)
+
+    def create(self, validated_data):
+        post = validated_data.get('post')
+        validated_data['farmer'] = post.farmer if post else None
+        validated_data.setdefault('post_title', post.title if post else '')
+        return super().create(validated_data)
 
     def validate(self, attrs):
         customer = self.context['request'].user

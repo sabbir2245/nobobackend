@@ -7,8 +7,10 @@ from .models import Review
 @receiver(post_save, sender=Review)
 @receiver(post_delete, sender=Review)
 def update_farmer_rating_stats(sender, instance, **kwargs):
-    farmer = instance.post.farmer
-    stats = Review.objects.filter(post__farmer=farmer).aggregate(
+    farmer = instance.farmer
+    if farmer is None:
+        return
+    stats = Review.objects.filter(farmer=farmer).aggregate(
         avg=Avg('rating'),
         count=Count('id')
     )

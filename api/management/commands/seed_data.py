@@ -142,9 +142,9 @@ class Command(BaseCommand):
         self.stdout.write("Creating users (1 Admin, 5 Farmers, 2 Customers, 2 Deliverymen)...")
 
         admin_user = User.objects.create_superuser(
-            username="admin",
-            email="admin@nobanno.gov.bd",
-            password="mik",
+            username="robi",
+            email="nobanno69@gmail.com",
+            password="lifeisso4green@",
             role="admin",
             name="Super Admin",
             phone_number="01000000000",
@@ -200,7 +200,19 @@ class Command(BaseCommand):
             address="Savar, Dhaka",
             location=union_obj(3271), is_verified=True,
         )
-        for c in [c1, c2]:
+        c3 = User.objects.create_user(
+            username="cmukta", email="mukta@bazar.com", password="C3",
+            role="customer", name="Mukta Rahman", phone_number="01655567891",
+            address="Nabinagar, Savar, Dhaka",
+            location=union_obj(3282), is_verified=True,
+        )
+        c4 = User.objects.create_user(
+            username="ctanvir", email="tanvir@kitchen.com", password="C4",
+            role="customer", name="Tanvir Ahmed", phone_number="01777788990",
+            address="Hemayetpur, Savar, Dhaka",
+            location=union_obj(3271), is_verified=True,
+        )
+        for c in [c1, c2, c3, c4]:
             Token.objects.create(user=c)
 
         d1 = User.objects.create_user(
@@ -225,7 +237,7 @@ class Command(BaseCommand):
         # ==========================================
         # IMAGE UTILITY
         # ==========================================
-        timage_dir = os.path.join(settings.BASE_DIR, 'timage')
+        timage_dir = settings.MEDIA_ROOT
         fallback_bytes = (
             b'\x47\x49\x46\x38\x39\x61\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00'
             b'\xff\xff\xff\x21\xf9\x04\x01\x00\x00\x00\x00\x2c\x00\x00\x00\x00'
@@ -240,8 +252,13 @@ class Command(BaseCommand):
                         full_path = os.path.join(timage_dir, actual_file)
                         break
             if os.path.exists(full_path) and os.path.isfile(full_path):
+                stored_name = filename
+                # Extensionless source files would be served as octet-stream and
+                # may not render; give them a .jpg so they serve as image/jpeg.
+                if not os.path.splitext(stored_name)[1]:
+                    stored_name = stored_name + '.jpg'
                 with open(full_path, 'rb') as f:
-                    return SimpleUploadedFile(name=filename, content=f.read(), content_type='image/jpeg')
+                    return SimpleUploadedFile(name=stored_name, content=f.read(), content_type='image/jpeg')
             return SimpleUploadedFile(name=f"fallback_{filename}.gif", content=fallback_bytes, content_type='image/gif')
 
         # ==========================================
@@ -296,6 +313,21 @@ class Command(BaseCommand):
             f1, "Tomato", "Ripe Red Hybrid Tomato", 55.00, 600,
             "Juicy, uniformly red hybrid tomatoes. Picked at peak ripeness, packed for distance.",
             3282, savar_cp, "tomato.jpg")
+        p_tomato_organic = create_post(
+            f1, "Tomato", "Organic Cherry Tomatoes (Premium)", 90.00, 400,
+            "Premium cherry tomatoes, naturally ripened, high brix sweetness. Hand-sorted and boxed for retail.",
+            3282, savar_cp, "-tomato-- (15)",
+            gallery=("-tomato-- (16)", "-tomato-- (9)"))
+        p_tomato_deshi = create_post(
+            f1, "Tomato", "Deshi Red Tomato (Number 65 Grade)", 48.00, 900,
+            "Farm-fresh deshi red tomatoes, thick skin, ideal for curry and paste. Bulk wholesale supply.",
+            3282, savar_cp, "-tomato--number- (65)",
+            gallery=("-tomato--number- (69)", "-tomato--number- (9)"))
+        p_tomato_web = create_post(
+            f1, "Tomato", "Premium Fresh Tomato (Web Featured)", 68.00, 500,
+            "Premium fresh red tomatoes, thick skin and sweet flesh. Hand-picked, graded and boxed for delivery.",
+            3282, savar_cp, "tomato_1.jpeg",
+            gallery=("tomato_2.jpeg", "tomato_3.jpeg"))
 
         # ---- Bogura (f2 Rahim) ----
         p_cucumber = create_post(
@@ -484,12 +516,73 @@ class Command(BaseCommand):
                               comment="Sweet bananas, delivery on time.")
 
         # ==========================================
+        # JAMAL TOMATO POSTS — completed orders + reviews with images (4 customers)
+        # ==========================================
+        self.stdout.write("Creating Jamal tomato orders + reviews (4 customers)...")
+
+        def add_completed_tomato_order(customer, post, qty):
+            with transaction.atomic():
+                qty_dec = Decimal(str(qty))
+                total = round(qty_dec * Decimal(str(post.price_per_kg)), 2)
+                fee = round(total * Decimal('0.10'), 2)
+                payout = total - fee
+                return Order.objects.create(
+                    customer=customer, post=post, quantity_kg=qty_dec, status='completed',
+                    total_paid=total, platform_fee=fee, farmer_payout=payout,
+                    delivery_address=customer.address or 'Dhaka',
+                    delivered_at=timezone.now(),
+                )
+
+        def add_tomato_review(customer, post, rating, comment, images):
+            review = Review.objects.create(
+                customer=customer, post=post, farmer=f1, post_title=post.title,
+                rating=rating, comment=comment,
+            )
+            for img_name in images:
+                ReviewImage.objects.create(review=review, image=get_image_file(img_name))
+            return review
+
+        # Completed orders so the reviews below are backed by real purchases.
+        add_completed_tomato_order(c1, p_tomato_organic, 15)
+        add_completed_tomato_order(c2, p_tomato_organic, 20)
+        add_completed_tomato_order(c3, p_tomato_deshi, 50)
+        add_completed_tomato_order(c4, p_tomato_deshi, 40)
+
+        # 4 customers leave reviews with photos on Jamal's tomato posts.
+        add_tomato_review(c1, p_tomato_organic, 5,
+                          "Amazing cherry tomatoes — so sweet and fresh. Perfect for our restaurant salads.",
+                          ("-tomato-- (15)", "-tomato-- (16)"))
+        add_tomato_review(c2, p_tomato_organic, 4,
+                          "Very good quality, arrived crisp and well packed. A bit pricey but worth it.",
+                          ("-tomato-- (9)",))
+        add_tomato_review(c3, p_tomato_deshi, 5,
+                          "Best deshi tomatoes I have bought in bulk. Thick flesh, no spoilage.",
+                          ("-tomato--number- (65)", "-tomato--number- (69)"))
+        add_tomato_review(c4, p_tomato_deshi, 3,
+                          "Good tomatoes overall, but a few were overripe this time.",
+                          ("-tomato--number- (9)",))
+
+        # Featured web tomato post — 3 customers review with 1, 2 and 3 images.
+        add_completed_tomato_order(c1, p_tomato_web, 25)
+        add_completed_tomato_order(c2, p_tomato_web, 30)
+        add_completed_tomato_order(c3, p_tomato_web, 20)
+        add_tomato_review(c1, p_tomato_web, 5,
+                          "Perfect tomatoes — sweet, thick, and arrived fresh. Highly recommend.",
+                          ("tomato_1.jpeg",))
+        add_tomato_review(c2, p_tomato_web, 4,
+                          "Great quality and well packed. Loved the ripeness.",
+                          ("tomato_1.jpeg", "tomato_2.jpeg"))
+        add_tomato_review(c3, p_tomato_web, 5,
+                          "Excellent farm-fresh tomatoes. Will order again for our shop.",
+                          ("tomato_1.jpeg", "tomato_2.jpeg", "tomato_3.jpeg"))
+
+        # ==========================================
         # SUMMARY
         # ==========================================
         self.stdout.write(self.style.SUCCESS("Comprehensive seed completed successfully!"))
         self.stdout.write(f"  Admin:           admin / mik")
         self.stdout.write(f"  Farmers:         fjamal(F1), frahim(F2), fkarim(F3), fselim(F4), farif(F5)")
-        self.stdout.write(f"  Customers:       rahimk(C) [ratul], chasan(C23)")
+        self.stdout.write(f"  Customers:       rahimk(C) [ratul], chasan(C23), cmukta(C3), ctanvir(C4)")
         self.stdout.write(f"  Deliverymen:     dkarim (D1) [Savar Dhaka], drahim (D2) [Comilla]")
         self.stdout.write(f"  Areas:           {Area.objects.count()} created")
         self.stdout.write(f"  Orders:          {Order.objects.count()} total, "
