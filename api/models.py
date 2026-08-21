@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.db.models import Sum
@@ -41,30 +42,48 @@ class User(AbstractUser):
     location = models.ForeignKey(
         'BangladeshLocation', on_delete=models.PROTECT,
         null=True, blank=True, related_name='users')
+    bkash_number = models.CharField(max_length=15, blank=True, null=True)
 
     @property
     def total_sales(self):
         if self.role != 'farmer':
             return None
         from django.apps import apps
-        OrderModel = apps.get_model('api', 'Order')
-        return OrderModel.objects.filter(post__farmer=self, status='completed').aggregate(
-            sum=Sum('total_paid')
-        )['sum'] or 0.00
+        OrderItemModel = apps.get_model('api', 'OrderItem')
+        return OrderItemModel.objects.filter(
+            farmer=self, order__status='completed'
+        ).aggregate(sum=Sum('subtotal'))['sum'] or 0.00
 
     def __str__(self):
         return f"{self.username} ({self.role})"
 
 
 class Post(models.Model):
+    # Selling unit: per-KG (weight) or per-piece (e.g. chicken, eggs, mango).
+    QUANTITY_TYPE_CHOICES = (
+        ('kg', 'Per KG'),
+        ('piece', 'Per Piece'),
+    )
     farmer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='posts', limit_choices_to={'role': 'farmer'})
     product_type = models.ForeignKey(ProductType, on_delete=models.SET_NULL, null=True, blank=True, related_name='posts')
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
     image_url = models.URLField(max_length=500, blank=True, null=True)
     image = models.ImageField(upload_to='post_images/', blank=True, null=True)
+    quantity_type = models.CharField(max_length=10, choices=QUANTITY_TYPE_CHOICES, default='kg',
+                                     help_text="'kg' sells by weight, 'piece' sells by individual unit")
+    # For 'kg' posts this is the stock in kg; for 'piece' posts this is the stock in pieces.
     total_weight_kg = models.DecimalField(max_digits=10, decimal_places=2)
+    # For 'kg' posts this is price per kg; for 'piece' posts this is price per piece.
     price_per_kg = models.DecimalField(max_digits=10, decimal_places=2)
+    # For 'piece' posts: estimated weight per piece (used to keep pooling/batching weight-based).
+    est_weight_kg = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    # Numerical availability window (in hours) during which the farmer can fulfill the post.
+    time_availability = models.PositiveIntegerField(default=0, help_text="Availability window in hours")
+    # Soft-delete / expiry flag. True by default. Set to False instead of actually
+    # deleting the post; also flipped to False once the post's availability window
+    # has elapsed (see the `expire_posts` management command).
+    is_visible = models.BooleanField(default=True)
     # Collection point location (a Union/Upazila BangladeshLocation node).
     # Required by the API; nullable at DB level for migration safety.
     location = models.ForeignKey(
@@ -77,6 +96,35 @@ class Post(models.Model):
     @property
     def total_price(self):
         return round(self.total_weight_kg * self.price_per_kg, 2)
+
+    @property
+    def is_piece(self):
+        return self.quantity_type == 'piece'
+
+    @property
+    def effective_weight_kg(self):
+        """Total stock expressed in kg for pooling/batching purposes.
+
+        Per-piece posts multiply the piece count by the estimated weight per
+        piece so the weight-based delivery pooling keeps working.
+        """
+        if self.is_piece and self.est_weight_kg:
+            return round(self.total_weight_kg * self.est_weight_kg, 2)
+        return self.total_weight_kg
+
+    @property
+    def expires_at(self):
+        """Datetime when the post's availability window elapses, or None if no window is set."""
+        if self.time_availability:
+            return self.created_at + timedelta(hours=self.time_availability)
+        return None
+
+    def is_expired(self):
+        """True once the availability window has passed. A 0 (or unset) window never expires."""
+        exp = self.expires_at
+        if exp is None:
+            return False
+        return timezone.now() > exp
 
     def __str__(self):
         return f"{self.title} - {self.total_weight_kg}kg by {self.farmer.username}"
@@ -91,16 +139,15 @@ class PostImage(models.Model):
 class Order(models.Model):
     STATUS_CHOICES = (
         ('pending', 'Pending'),
+        ('approved', 'Approved'),
         ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
     )
     customer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders', limit_choices_to={'role': 'customer'})
-    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name='orders')
-    quantity_kg = models.DecimalField(max_digits=10, decimal_places=2)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    total_paid = models.DecimalField(max_digits=10, decimal_places=2)
-    platform_fee = models.DecimalField(max_digits=10, decimal_places=2)
-    farmer_payout = models.DecimalField(max_digits=10, decimal_places=2)
+    total_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    platform_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    farmer_payout = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     delivery_address = models.TextField()
     # bKash payment fields on the order
     bkash_payment_id = models.CharField(max_length=100, null=True, blank=True)
@@ -108,13 +155,49 @@ class Order(models.Model):
     bkash_payment_status = models.CharField(max_length=20, null=True, blank=True)
     paid_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     paid_at = models.DateTimeField(null=True, blank=True)
+    # Escrow payment flow: 50% advance + 50% final settlement
+    advance_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    final_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    advance_paid = models.BooleanField(default=False)
+    final_paid = models.BooleanField(default=False)
     # Delivery tracking (set when the batch containing this order is delivered)
     delivered_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"Order #{self.id} for {self.post.title} ({self.status})"
+        return f"Order #{self.id} ({self.status})"
+
+    @property
+    def effective_weight_kg(self):
+        """Total weight across all items for pooling/batching."""
+        return sum((item.effective_weight_kg for item in self.items.all()), Decimal('0'))
+
+
+class OrderItem(models.Model):
+    """A line item within an Order. One order can contain multiple products from different farmers."""
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name='order_items')
+    farmer = models.ForeignKey(User, on_delete=models.PROTECT, related_name='order_items', limit_choices_to={'role': 'farmer'})
+    quantity_kg = models.DecimalField(max_digits=10, decimal_places=2)
+    quantity_type = models.CharField(max_length=10, choices=Post.QUANTITY_TYPE_CHOICES, default='kg')
+    est_weight_kg = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    price_per_kg = models.DecimalField(max_digits=10, decimal_places=2)
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2)
+
+    def __str__(self):
+        return f"OrderItem: {self.post.title} x{self.quantity_kg} in Order #{self.order_id}"
+
+    @property
+    def is_piece(self):
+        return self.quantity_type == 'piece'
+
+    @property
+    def effective_weight_kg(self):
+        """Quantity expressed in kg for pooling/batching."""
+        if self.is_piece and self.est_weight_kg:
+            return round(self.quantity_kg * self.est_weight_kg, 2)
+        return self.quantity_kg
 
 
 class Review(models.Model):
@@ -140,6 +223,39 @@ class ReviewImage(models.Model):
     review = models.ForeignKey(Review, on_delete=models.CASCADE, related_name='images')
     image = models.ImageField(upload_to='review_images/', blank=True, null=True)
     image_url = models.URLField(max_length=500, blank=True, null=True)
+
+
+class Bid(models.Model):
+    """Bidding & negotiation between a customer and a farmer on a post.
+
+    A customer may place exactly one bid per post. The farmer may submit a
+    single counter-offer (final price). The customer then confirms or rejects.
+    """
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('counter_offered', 'Counter Offered'),
+        ('accepted', 'Accepted'),
+        ('rejected', 'Rejected'),
+        ('cancelled', 'Cancelled'),
+    )
+    customer = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name='bids',
+        limit_choices_to={'role': 'customer'})
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name='bids')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    # The farmer's single counter-bid / final price.
+    counter_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    message = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('customer', 'post')
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Bid #{self.id} ({self.amount} BDT) on {self.post.title} — {self.status}"
 
 
 class OTP(models.Model):
@@ -182,25 +298,84 @@ class Payment(models.Model):
     PAYMENT_GATEWAY_CHOICES = (
         ('sslcommerz', 'SSLCommerz'),
         ('bkash', 'bKash'),
+        ('uddoktapay', 'UddoktaPay'),
+    )
+    PAYMENT_TYPE_CHOICES = (
+        ('advance', 'Advance (50%)'),
+        ('final', 'Final (50%)'),
     )
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='payments')
     order = models.ForeignKey(Order, on_delete=models.SET_NULL, null=True, blank=True, related_name='payments')
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    transaction_id = models.CharField(max_length=100, unique=True)
+    payment_type = models.CharField(max_length=10, choices=PAYMENT_TYPE_CHOICES, default='final')
+    transaction_id = models.CharField(max_length=100, db_index=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='initiated')
     gateway = models.CharField(max_length=20, choices=PAYMENT_GATEWAY_CHOICES, default='bkash')
     gateway_response = models.JSONField(null=True, blank=True)
     # bKash specific fields
     bkash_payment_id = models.CharField(max_length=100, null=True, blank=True)
     bkash_trx_id = models.CharField(max_length=100, null=True, blank=True)
+    # UddoktaPay specific fields
+    uddokta_invoice_id = models.CharField(max_length=100, null=True, blank=True)
+    sender_number = models.CharField(max_length=20, null=True, blank=True)
     # Settlement ledger tracking
     paid_at = models.DateTimeField(null=True, blank=True)
     settlement_appended = models.BooleanField(default=False)
+    # Admin farmer-due settlement CHECKBOX: True once admin marks this payment's
+    # farmer payout as actually settled/paid out (website admin portal action).
+    settlement_paid = models.BooleanField(default=False)
+    settlement_paid_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"Payment {self.transaction_id} - {self.status} ({self.amount} BDT)"
+
+
+class ManualBkashPayment(models.Model):
+    """Customer-submitted manual bKash Send Money payment awaiting admin approval.
+
+    The customer sends money via bKash Send Money (to a platform number),
+    then submits the trx ID + sender number + amount here. An admin reviews
+    the submission, matches the trx ID against bKash records, and clicks
+    "Approve" to link it to an order and mark the payment as successful.
+    """
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    )
+    PAYMENT_TYPE_CHOICES = (
+        ('advance', 'Advance (50%)'),
+        ('final', 'Final (50%)'),
+    )
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='manual_bkash_payments')
+    order = models.ForeignKey(Order, on_delete=models.SET_NULL, null=True, blank=True, related_name='manual_bkash_payments')
+
+    sender_number = models.CharField(max_length=20, help_text="bKash number money was sent FROM")
+    amount = models.DecimalField(max_digits=10, decimal_places=2, help_text="Amount sent via bKash")
+    trx_id = models.CharField(max_length=50, help_text="bKash Send Money Transaction ID")
+    payment_type = models.CharField(max_length=10, choices=PAYMENT_TYPE_CHOICES, default='advance',
+                                    help_text="advance (50%) or final (50%)")
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    admin_note = models.TextField(blank=True, default='', help_text="Admin note on approve/reject")
+
+    # When approved, a Payment record is created and linked
+    payment = models.ForeignKey(Payment, on_delete=models.SET_NULL, null=True, blank=True, related_name='manual_bkash_submissions')
+
+    approved_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_manual_bkash_payments')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"ManualBkash {self.trx_id} - {self.status} ({self.amount} BDT) by {self.user.username}"
 
 
 class FarmerBankAccount(models.Model):
@@ -235,6 +410,7 @@ class BangladeshLocation(models.Model):
         ('district', 'District'),
         ('upazila', 'Upazila'),
         ('union', 'Union'),
+        ('ward', 'Ward / City Corporation Area'),
     )
     geo_id = models.IntegerField(null=True, blank=True)
     name_en = models.CharField(max_length=200)
@@ -245,6 +421,10 @@ class BangladeshLocation(models.Model):
     latitude = models.FloatField(null=True, blank=True)
     longitude = models.FloatField(null=True, blank=True)
     url = models.CharField(max_length=255, blank=True, default='')
+    # City Corporation context (for ward-level areas, e.g. Dhaka North/South).
+    # city_corp is the short tag (DNCC / DSCC); ward_no is the numeric ward.
+    city_corp = models.CharField(max_length=20, blank=True, default='')
+    ward_no = models.CharField(max_length=10, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -296,6 +476,8 @@ class Batch(models.Model):
     STATUS_CHOICES = (
         ('pending', 'Pending'),
         ('assigned', 'Assigned'),
+        ('picked_up', 'Picked Up at Union'),
+        ('in_transit', 'In Transit'),
         ('delivered', 'Delivered'),
         ('cancelled', 'Cancelled'),
     )
@@ -308,6 +490,9 @@ class Batch(models.Model):
         related_name='batches', limit_choices_to={'role': 'deliveryman'})
     total_quantity_kg = models.DecimalField(max_digits=12, decimal_places=2)
     total_value = models.DecimalField(max_digits=12, decimal_places=2)
+    # Set by the deliveryman at handover to confirm the customer settled the final
+    # payment, giving admins visual confirmation of settlement.
+    payment_verified = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     assigned_at = models.DateTimeField(null=True, blank=True)
     delivered_at = models.DateTimeField(null=True, blank=True)
@@ -327,3 +512,43 @@ class BatchItem(models.Model):
 
     def __str__(self):
         return f"BatchItem for Order #{self.order_id} in Batch #{self.batch_id}"
+
+
+class Notification(models.Model):
+    """Real-time delivery / handover notifications.
+
+    Backend stores the notification so the app can poll (`GET /api/notifications/`)
+    for real-time delivery updates. A future FCM/websocket layer can push these
+    the same records to devices.
+    """
+    TYPE_CHOICES = (
+        ('batch_assigned', 'Batch Assigned'),
+        ('batch_picked_up', 'Batch Picked Up'),
+        ('batch_in_transit', 'Batch In Transit'),
+        ('payment_verified', 'Payment Verified'),
+        ('batch_delivered', 'Batch Delivered'),
+        ('system', 'System'),
+    )
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    notification_type = models.CharField(max_length=30, choices=TYPE_CHOICES, default='system')
+    title = models.CharField(max_length=200)
+    message = models.TextField(blank=True, default='')
+    # Optional links so the app can deep-link to the affected batch/order.
+    batch = models.ForeignKey(Batch, on_delete=models.CASCADE, null=True, blank=True, related_name='notifications')
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, null=True, blank=True, related_name='notifications')
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Notification to {self.user.username}: {self.title}"
+
+
+class FarmerDue(Order):
+    """Proxy model so 'Farmer Dues' appears in Django admin sidebar under API."""
+    class Meta:
+        proxy = True
+        verbose_name = 'Farmer Dues'
+        verbose_name_plural = 'Farmer Dues'

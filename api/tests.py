@@ -3,6 +3,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import get_user_model
+from .services import add_order_to_pool
 from .models import (
     Order, Post, ProductType, BangladeshLocation, Area,
     PendingPool, Batch, BatchItem,
@@ -112,7 +113,7 @@ class DeliverySystemTest(TestCase):
             'password': 'testpass123',
             'role': role,
             'name': username.title(),
-            'phone_number': f'01{username}00000',
+            'phone_number': '01' + str(abs(hash(username)) % 10**9).zfill(9),
             'location': location_id,
         }
         payload.update(extra)
@@ -192,6 +193,9 @@ class DeliverySystemTest(TestCase):
             'post': post.id, 'quantity_kg': '60', 'delivery_address': 'Dhaka',
         }, format='json', HTTP_AUTHORIZATION=f'Token {c_token}')
         self.assertEqual(r1.status_code, 201, r1.data)
+        order1 = Order.objects.get(id=r1.data['id'])
+        order1.status = 'approved'; order1.save(update_fields=['status'])
+        add_order_to_pool(order1)
         pool = PendingPool.objects.get(area=self.area, union=self.union, product_type=self.product_type)
         self.assertEqual(pool.pending_quantity_kg, Decimal('60'))
         self.assertEqual(Batch.objects.count(), 0)
@@ -201,6 +205,9 @@ class DeliverySystemTest(TestCase):
             'post': post.id, 'quantity_kg': '50', 'delivery_address': 'Dhaka',
         }, format='json', HTTP_AUTHORIZATION=f'Token {c_token}')
         self.assertEqual(r2.status_code, 201, r2.data)
+        order2 = Order.objects.get(id=r2.data['id'])
+        order2.status = 'approved'; order2.save(update_fields=['status'])
+        add_order_to_pool(order2)
         pool.refresh_from_db()
         self.assertEqual(pool.pending_quantity_kg, Decimal('0'))
         self.assertEqual(Batch.objects.count(), 1)
@@ -214,10 +221,12 @@ class DeliverySystemTest(TestCase):
     def test_deliveryman_accept_single_and_concurrent(self):
         post, c_token = self._seed_post_and_customer()
         # Fill pool past threshold -> one pending batch
-        self.client.post('/api/orders/', {'post': post.id, 'quantity_kg': '60', 'delivery_address': 'Dhaka'},
-                         format='json', HTTP_AUTHORIZATION=f'Token {c_token}')
-        self.client.post('/api/orders/', {'post': post.id, 'quantity_kg': '50', 'delivery_address': 'Dhaka'},
-                         format='json', HTTP_AUTHORIZATION=f'Token {c_token}')
+        r1 = self.client.post('/api/orders/', {'post': post.id, 'quantity_kg': '60', 'delivery_address': 'Dhaka'},
+                              format='json', HTTP_AUTHORIZATION=f'Token {c_token}')
+        r2 = self.client.post('/api/orders/', {'post': post.id, 'quantity_kg': '50', 'delivery_address': 'Dhaka'},
+                              format='json', HTTP_AUTHORIZATION=f'Token {c_token}')
+        o1 = Order.objects.get(id=r1.data['id']); o1.status = 'approved'; o1.save(update_fields=['status']); add_order_to_pool(o1)
+        o2 = Order.objects.get(id=r2.data['id']); o2.status = 'approved'; o2.save(update_fields=['status']); add_order_to_pool(o2)
         batch = Batch.objects.first()
 
         reg_d1 = self.register('deliveryman', 'dlyd1', self.union.id)
@@ -251,10 +260,12 @@ class DeliverySystemTest(TestCase):
 
     def test_batch_deliver_flow(self):
         post, c_token = self._seed_post_and_customer()
-        self.client.post('/api/orders/', {'post': post.id, 'quantity_kg': '60', 'delivery_address': 'Dhaka'},
-                         format='json', HTTP_AUTHORIZATION=f'Token {c_token}')
-        self.client.post('/api/orders/', {'post': post.id, 'quantity_kg': '50', 'delivery_address': 'Dhaka'},
-                         format='json', HTTP_AUTHORIZATION=f'Token {c_token}')
+        r1 = self.client.post('/api/orders/', {'post': post.id, 'quantity_kg': '60', 'delivery_address': 'Dhaka'},
+                              format='json', HTTP_AUTHORIZATION=f'Token {c_token}')
+        r2 = self.client.post('/api/orders/', {'post': post.id, 'quantity_kg': '50', 'delivery_address': 'Dhaka'},
+                              format='json', HTTP_AUTHORIZATION=f'Token {c_token}')
+        o1 = Order.objects.get(id=r1.data['id']); o1.status = 'approved'; o1.save(update_fields=['status']); add_order_to_pool(o1)
+        o2 = Order.objects.get(id=r2.data['id']); o2.status = 'approved'; o2.save(update_fields=['status']); add_order_to_pool(o2)
         batch = Batch.objects.first()
 
         reg_d1 = self.register('deliveryman', 'dlyddlv', self.union.id)
@@ -268,6 +279,11 @@ class DeliverySystemTest(TestCase):
         self.assertEqual(early.status_code, 403)
 
         self.client.post(f'/api/batches/{batch.id}/accept/', HTTP_AUTHORIZATION=f'Token {d1_token}')
+        # New delivery workflow: must pick up and mark in-transit before final deliver.
+        pu = self.client.post(f'/api/batches/{batch.id}/pick_up/', HTTP_AUTHORIZATION=f'Token {d1_token}')
+        self.assertEqual(pu.status_code, 200, pu.data)
+        it = self.client.post(f'/api/batches/{batch.id}/in_transit/', HTTP_AUTHORIZATION=f'Token {d1_token}')
+        self.assertEqual(it.status_code, 200, it.data)
         dlv = self.client.post(f'/api/batches/{batch.id}/deliver/', HTTP_AUTHORIZATION=f'Token {d1_token}')
         self.assertEqual(dlv.status_code, 200, dlv.data)
         batch.refresh_from_db()

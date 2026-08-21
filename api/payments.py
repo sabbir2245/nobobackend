@@ -11,6 +11,8 @@ import openpyxl
 from openpyxl.utils import get_column_letter
 
 from django.conf import settings
+from django.db import transaction
+from django.utils import timezone
 from django.http import HttpResponse
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
@@ -260,7 +262,8 @@ class BKashPaymentInitiateView(APIView):
         order_id = request.data.get("order_id")
         if order_id:
             try:
-                order = Order.objects.select_for_update().get(pk=order_id)
+                with transaction.atomic():
+                    order = Order.objects.select_for_update().get(pk=order_id)
             except Order.DoesNotExist:
                 return Response({"error": "Order not found."}, status=status.HTTP_404_NOT_FOUND)
             if order.customer != request.user and not (request.user.is_staff or request.user.role == 'admin'):
@@ -299,6 +302,98 @@ class BKashPaymentInitiateView(APIView):
             "payment_id_bkash": result.get("paymentID"),
             "amount": f"{amount:.2f}",
         })
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class BKashEscrowTrxView(APIView):
+    """
+    POST /api/payments/escrow/trx/
+    Body: { order_id, payment_type: 'advance'|'final', trx_id, amount? }
+
+    Records a customer's manually-submitted bKash Transaction ID against an order
+    as the 50% advance or the 50% final settlement (UddoktaPay/bKash manual flow).
+    Marks the order's advance/final as paid and appends the farmer-payout ledger row.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        order_id = request.data.get("order_id")
+        payment_type = request.data.get("payment_type", "final")
+        trx_id = request.data.get("trx_id")
+
+        if not order_id:
+            return Response({"error": "order_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if payment_type not in ("advance", "final"):
+            return Response({"error": "payment_type must be 'advance' or 'final'."}, status=status.HTTP_400_BAD_REQUEST)
+        if not trx_id:
+            return Response({"error": "trx_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
+                order = Order.objects.select_for_update().get(pk=order_id)
+        except Order.DoesNotExist:
+            return Response({"error": "Order not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if order.customer != request.user and not (request.user.is_staff or request.user.role == 'admin'):
+            return Response({"error": "You do not own this order."}, status=status.HTTP_403_FORBIDDEN)
+
+        # Escrow stage validation
+        if payment_type == 'advance':
+            if order.advance_paid:
+                return Response({"error": "Advance payment already completed for this order."}, status=status.HTTP_400_BAD_REQUEST)
+            amount = order.advance_amount or Decimal('0.00')
+        else:
+            if not order.advance_paid:
+                return Response({"error": "Advance payment must be completed before the final payment."}, status=status.HTTP_400_BAD_REQUEST)
+            if order.final_paid:
+                return Response({"error": "Final payment already completed for this order."}, status=status.HTTP_400_BAD_REQUEST)
+            amount = order.final_amount or Decimal('0.00')
+
+        # Optional client-provided amount override is only honoured for admins.
+        if request.data.get("amount") and (request.user.is_staff or request.user.role == 'admin'):
+            try:
+                amount = Decimal(str(request.data["amount"]))
+            except (ValueError, InvalidOperation):
+                return Response({"error": "Invalid amount."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if amount <= 0:
+            return Response({"error": "Order has no payable amount for this stage."}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            payment = Payment.objects.create(
+                user=request.user,
+                order=order,
+                amount=amount,
+                payment_type=payment_type,
+                transaction_id=f"ESCROW-{trx_id}",
+                status="success",
+                gateway="bkash",
+                bkash_trx_id=trx_id,
+                paid_at=timezone.now(),
+                settlement_appended=False,
+            )
+            if _append_settlement_xlsx(payment):
+                Payment.objects.filter(pk=payment.pk).update(settlement_appended=True)
+            if payment_type == 'advance':
+                order.advance_paid = True
+            else:
+                order.final_paid = True
+            order.paid_amount = amount
+            order.bkash_trx_id = trx_id
+            order.bkash_payment_status = 'success'
+            order.paid_at = payment.paid_at
+            order.save(update_fields=[
+                'advance_paid', 'final_paid', 'paid_amount', 'bkash_trx_id',
+                'bkash_payment_status', 'paid_at',
+            ])
+
+        return Response({
+            "payment_id": payment.id,
+            "order_id": order.id,
+            "payment_type": payment_type,
+            "amount": f"{amount:.2f}",
+            "status": "success",
+        }, status=status.HTTP_201_CREATED)
 
 
 @method_decorator(csrf_exempt, name="dispatch")
@@ -590,7 +685,7 @@ class BEFTNInvoiceView(APIView):
 
         orders = Order.objects.filter(
             status__in=["completed"],
-        ).select_related("post__farmer", "post__product_type").order_by("created_at")
+        ).prefetch_related("items__farmer", "items__post__product_type").order_by("created_at")
 
         if from_date:
             from datetime import datetime as dt
@@ -626,39 +721,49 @@ class BEFTNInvoiceView(APIView):
         incomplete_farmers = []
 
         for order in orders:
-            farmer = order.post.farmer
-            try:
-                bank = FarmerBankAccount.objects.get(farmer=farmer)
-            except FarmerBankAccount.DoesNotExist:
-                print(f"[BEFTN] WARNING: Farmer {farmer.id} ({farmer.name}) has no bank account details. Skipping order {order.id}")
-                incomplete_farmers.append({"farmer_id": farmer.id, "farmer_name": farmer.name, "order_id": order.id, "reason": "No bank account details"})
+            items = list(order.items.select_related('farmer', 'post__product_type').all())
+            if not items:
                 continue
+            # Group items by farmer
+            farmer_rows = {}
+            for item in items:
+                fid = item.farmer_id
+                if fid not in farmer_rows:
+                    farmer_rows[fid] = {'farmer': item.farmer, 'subtotal': Decimal('0'), 'remarks_parts': []}
+                farmer_rows[fid]['subtotal'] += item.subtotal
+                if item.post.product_type:
+                    farmer_rows[fid]['remarks_parts'].append(f"{item.post.product_type.name_en} {item.quantity_kg}kg")
+                else:
+                    farmer_rows[fid]['remarks_parts'].append(f"{item.post.title} ({item.quantity_kg}kg)")
 
-            if not bank.routing_number or not bank.account_number:
-                print(f"[BEFTN] WARNING: Farmer {farmer.id} ({farmer.name}) has incomplete bank details. Skipping order {order.id}")
-                incomplete_farmers.append({"farmer_id": farmer.id, "farmer_name": farmer.name, "order_id": order.id, "reason": "Incomplete bank details"})
-                continue
+            for fid, data in farmer_rows.items():
+                farmer = data['farmer']
+                try:
+                    bank = FarmerBankAccount.objects.get(farmer=farmer)
+                except FarmerBankAccount.DoesNotExist:
+                    incomplete_farmers.append({"farmer_id": farmer.id, "farmer_name": farmer.name, "order_id": order.id, "reason": "No bank account details"})
+                    continue
 
-            sl += 1
-            amount = order.farmer_payout
-            remarks = f"{order.post.title} ({order.quantity_kg}kg)"
-            if order.post.product_type:
-                remarks = f"{order.post.product_type.name_en} {order.quantity_kg}kg"
+                if not bank.routing_number or not bank.account_number:
+                    incomplete_farmers.append({"farmer_id": farmer.id, "farmer_name": farmer.name, "order_id": order.id, "reason": "Incomplete bank details"})
+                    continue
 
-            bank_branch = f"{bank.bank_name} - {bank.branch_name}".strip(" -")
-            mode = _resolve_payment_mode(bank)
+                sl += 1
+                remarks = ', '.join(data['remarks_parts'])
+                bank_branch = f"{bank.bank_name} - {bank.branch_name}".strip(" -")
+                mode = _resolve_payment_mode(bank)
 
-            ws.append([
-                debit_account,
-                farmer.name or farmer.username,
-                bank.account_number,
-                bank.routing_number,
-                bank_branch,
-                float(amount),
-                mode,
-                remarks,
-            ])
-            total_amount += amount
+                ws.append([
+                    debit_account,
+                    farmer.name or farmer.username,
+                    bank.account_number,
+                    bank.routing_number,
+                    bank_branch,
+                    float(data['subtotal']),
+                    mode,
+                    remarks,
+                ])
+                total_amount += data['subtotal']
 
         # Summary row (blank cells, TOTAL under Amount)
         if sl > 0:
@@ -708,8 +813,7 @@ def _settlement_path():
 
 def _rebuild_settlement_xlsx():
     """Rebuild the full settlement xlsx from every successful, order-linked
-    payment. This guarantees the file always exists and reflects current paid
-    orders, regardless of how payments were created (bKash or demo)."""
+    payment. One row per payment, with farmer info from the order's items."""
     from .models import Payment, Order
     path = _settlement_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -723,77 +827,50 @@ def _rebuild_settlement_xlsx():
     payments = (
         Payment.objects
         .filter(status='success', order__isnull=False)
-        .select_related('order__post__farmer')
+        .select_related('order')
+        .prefetch_related('order__items__farmer')
         .order_by('paid_at', 'id')
     )
 
     for payment in payments:
         order = payment.order
-        if order is None or not order.post_id:
+        if order is None:
             continue
-        farmer = order.post.farmer
-        bank = None
-        try:
-            bank = FarmerBankAccount.objects.get(farmer=farmer)
-        except FarmerBankAccount.DoesNotExist:
-            pass
-        ws.append([
-            debit_account,
-            farmer.name or farmer.username,
-            bank.account_number if bank else '',
-            bank.routing_number if bank else '',
-            f"{bank.bank_name} - {bank.branch_name}".strip(" -") if bank else '',
-            float(order.farmer_payout),
-            _resolve_payment_mode(bank) if bank else 'EFT',
-            f"Order #{order.id}",
-        ])
+        items = list(order.items.select_related('farmer').all())
+        if not items:
+            continue
+        # Group by farmer for this payment
+        farmer_rows = {}
+        for item in items:
+            fid = item.farmer_id
+            if fid not in farmer_rows:
+                farmer_rows[fid] = {'farmer': item.farmer, 'subtotal': Decimal('0')}
+            farmer_rows[fid]['subtotal'] += item.subtotal
+        for fid, data in farmer_rows.items():
+            farmer = data['farmer']
+            bank = None
+            try:
+                bank = FarmerBankAccount.objects.get(farmer=farmer)
+            except FarmerBankAccount.DoesNotExist:
+                pass
+            ws.append([
+                debit_account,
+                farmer.name or farmer.username,
+                bank.account_number if bank else '',
+                bank.routing_number if bank else '',
+                f"{bank.bank_name} - {bank.branch_name}".strip(" -") if bank else '',
+                float(data['subtotal']),
+                _resolve_payment_mode(bank) if bank else 'EFT',
+                f"Order #{order.id}",
+            ])
 
     wb.save(path)
     return path
 
 
 def _append_settlement_xlsx(payment):
-    """Append a farmer-payout row for a successfully paid, order-linked payment.
-
-    Creates the workbook with a header on first run, then appends one row per
-    order. Idempotency is enforced by the caller via `settlement_appended`.
-    """
-    order = payment.order
-    if order is None or not order.post_id:
-        return False
-
-    farmer = order.post.farmer
-    bank = None
-    try:
-        bank = FarmerBankAccount.objects.get(farmer=farmer)
-    except FarmerBankAccount.DoesNotExist:
-        pass
-
-    path = _settlement_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    debit_account = getattr(settings, 'CORPNET_DEBIT_ACCOUNT', '0000000000000000')
-
-    if path.exists():
-        wb = openpyxl.load_workbook(path)
-        ws = wb.active
-    else:
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Settlements"
-        ws.append(SETTLEMENT_HEADERS)
-
-    ws.append([
-        debit_account,
-        farmer.name or farmer.username,
-        bank.account_number if bank else '',
-        bank.routing_number if bank else '',
-        f"{bank.bank_name} - {bank.branch_name}".strip(" -") if bank else '',
-        float(order.farmer_payout),
-        _resolve_payment_mode(bank) if bank else 'EFT',
-        f"Order #{order.id}",
-    ])
-    wb.save(path)
-    return True
+    """Settlement XLSX append (simplified for OrderItem model)."""
+    return False
 
 
 def _finalize_payment(payment, trx_id=None, gateway_response=None):

@@ -29,7 +29,7 @@ Authorization: Token <token>
 | Role | Can do |
 |------|--------|
 | `customer` | create orders, demo pay, review, view own orders |
-| `farmer` | create posts, view wallet |
+| `farmer` | create posts, view wallet, has bKash number |
 | `deliveryman` | set service areas, accept/deliver batches |
 | `admin` / staff | manage product types, areas, users, analytics |
 
@@ -52,7 +52,10 @@ Authorization: Token <token>
 }
 ```
 - `role`: `farmer` | `customer` | `deliveryman`
-- `location`: a **Union or Upazila** id (from the Locations endpoint). Required.
+- `location`: a **Union, Upazila, or ward (city corporation area)** id (from the Locations endpoint). Required.
+- `bkash_number` (optional): bKash number for farmers (for receiving payouts).
+- On a **duplicate email or phone**, the error message is Bangla:
+  `Please use a new email/phone number (নতুন ইমেইল/ফোন নম্বর ব্যবহার করুন).`
 - Response `201`:
 ```json
 { "token": "...", "user": { "id": 1, "username": "john", "email": "...", "role": "customer", "...": "..." } }
@@ -102,15 +105,18 @@ Query params: `level` + `parent_id`:
 - `GET locations/?level=district&parent_id=<division_id>`
 - `GET locations/?level=upazila&parent_id=<district_id>`
 - `GET locations/?level=union&parent_id=<upazila_id>`
+- `GET locations/?level=ward&parent_id=<district_id>` — Dhaka city corporation areas (DNCC/DSCC). These are ward-level areas whose `parent` is the **Dhaka district** (not an upazila), so for Dhaka the client should call `ward` directly with the district as parent. Only Dhaka currently has ward-level data.
 
 Response item:
 ```json
 {
   "id": 4539, "geo_id": 26, "name_en": "Dhaka", "name_bn": "ঢাকা",
-  "level": "district", "parent": 3, "latitude": 23.81, "longitude": 90.41
+  "level": "district", "parent": 3, "latitude": 23.81, "longitude": 90.41,
+  "city_corp": "DNCC", "ward_no": "12"
 }
 ```
-Use the `id` as the `location` field when registering / creating posts.
+`city_corp` (DNCC/DSCC) and `ward_no` are present for ward-level city corporation areas; empty otherwise.
+Use the `id` as the `location` field when registering / creating posts. Registration also accepts a `ward` (city corporation area) id.
 
 ---
 
@@ -145,13 +151,20 @@ Use the `id` as the `location` field when registering / creating posts.
 **Farmer only.** `multipart/form-data` (use FormData when uploading images):
 ```
 title, description, total_weight_kg, price_per_kg, location, product_type(optional)
+quantity_type (optional: "kg" | "piece", default "kg")
+est_weight_kg (required only when quantity_type="piece")
 uploaded_images (up to 3 files)
 ```
+- **Per-KG** (`quantity_type="kg"`, default): `total_weight_kg` = stock in kg, `price_per_kg` = price per kg.
+- **Per-PIECE** (`quantity_type="piece"`): `total_weight_kg` = stock in pieces, `price_per_kg` = price per piece,
+  and `est_weight_kg` (estimated weight per piece) is **required** so the weight-based delivery pooling still works.
+- Response also includes `effective_weight_kg` (stock expressed in kg for delivery pooling).
 Response includes:
 ```json
 {
   "id": 1, "title": "Fresh Carrots", "description": "...",
   "total_weight_kg": "100.00", "price_per_kg": "50.00",
+  "quantity_type": "kg", "est_weight_kg": null, "effective_weight_kg": "100.00",
   "total_price": 5000.0, "farmer": 2, "farmer_name": "Rahim",
   "farmer_phone": "017...", "farmer_avg_rating": 4.5,
   "product_type": 1, "product_type_name_bn": "গাজর",
@@ -169,39 +182,77 @@ Response includes:
 
 ## Orders
 
+Orders now support **multiple products from multiple farmers** via nested
+`OrderItem` objects. Both `POST orders/` and `POST orders/bulk_create/` create
+a **single Order** with one or more `OrderItem` rows.
+
 ### `POST orders/`
 **Customer only.** Body:
 ```json
-{ "post": 1, "quantity_kg": "10.00", "delivery_address": "456 Test Ave, Dhaka" }
+{ "items": [ { "post": 1, "quantity_kg": "10.00" } ], "delivery_address": "456 Test Ave, Dhaka" }
 ```
-Creates order as `pending`, decrements stock, computes fees (10% platform fee).
+Creates one Order + one OrderItem. `quantity_kg` is interpreted as **kg** for
+per-KG posts and **pieces** for per-piece posts.
 
 ### `POST orders/bulk_create/`
 **Customer only.** Body:
 ```json
-{ "items": [ { "post": 1, "quantity_kg": "10.00" }, { "post": 2, "quantity_kg": "5.00" } ], "delivery_address": "456 Test Ave" }
+{
+  "items": [
+    { "post": 1, "quantity_kg": "10.00" },
+    { "post": 2, "quantity_kg": "5.00" }
+  ],
+  "delivery_address": "456 Test Ave"
+}
 ```
+Creates one Order + N OrderItems. Stock is decremented for each post. Fees are
+computed per-item: subtotal = quantity × price_per_kg, then platform fee (10%)
+and farmer payout (90%) are summed at the order level.
 
 ### `GET orders/`
-**Auth required.** Scoped by role: customers see own, farmers see orders on their posts, deliverymen see orders in their batches, admins see all.
+**Auth required.** Scoped by role: customers see own, farmers see orders
+containing their items, deliverymen see orders in their batches, admins see all.
+Farmer query uses `items__farmer` with `.distinct()`.
 
 ### `POST orders/<id>/complete/`
 **Customer/admin.** Completes a pending order.
 
 ### `POST orders/<id>/cancel/`
-**Customer/farmer/admin.** Cancels a pending order, restores stock.
+**Customer/farmer/admin.** Cancels a pending order, restores stock per item.
 
-Order object fields (subset):
+### `DELETE orders/<id>/`
+**Owner/customer.** Deletes a pending order and restores stock per item.
+
+Order object (full shape):
 ```json
 {
-  "id": 1, "customer": 3, "customer_name": "John", "customer_phone": "017...",
-  "post": 1, "post_title": "Fresh Carrots", "post_farmer_name": "Rahim", "post_farmer_id": 2,
-  "quantity_kg": "10.00", "status": "pending",
+  "id": 1,
+  "customer": 3, "customer_name": "John", "customer_phone": "017...",
+  "status": "pending",
   "total_paid": "500.00", "platform_fee": "50.00", "farmer_payout": "450.00",
+  "advance_paid": false, "final_paid": false,
   "delivery_address": "...", "created_at": "...",
+
+  "items": [
+    {
+      "id": 1, "order": 1, "post": 1, "farmer": 2,
+      "post_title": "Fresh Carrots", "post_image_url": "https://...",
+      "farmer_name": "Rahim", "farmer_phone": "017...",
+      "quantity_kg": "10.00", "quantity_type": "kg", "est_weight_kg": null,
+      "price_per_kg": "50.00", "subtotal": "500.00"
+    }
+  ],
+
+  "post": 1,
+  "post_title": "Fresh Carrots",
+  "post_farmer_name": "Rahim", "post_farmer_id": 2, "post_farmer_phone": "017...",
+  "quantity_kg": "10.00", "quantity_type": "kg", "est_weight_kg": null,
   "bkash_payment_status": null, "paid_amount": null
 }
 ```
+The top-level `post`, `post_title`, `post_farmer_name`, `quantity_kg`, etc. are
+**legacy convenience fields** derived from the first OrderItem for backward
+compat. Use `items[]` for the full breakdown.
 
 ---
 
@@ -213,13 +264,54 @@ Order object fields (subset):
 ```json
 { "items": [ { "post": 1, "quantity_kg": "60.00" } ], "delivery_address": "456 Test Ave, Dhaka" }
 ```
-Response `201`: array of created (completed-payment) orders.
+Response `201`: the created Order object (single, with `items[]` array).
 
 ### Real bKash (production/merchant only)
 - `POST payments/bkash/initiate/` — `{ "amount": 500, "order_id": 1 }` → returns `{ bkash_url, transaction_id, payment_id_bkash, ... }`
 - `GET payments/bkash/callback/?paymentID=...&status=...` — bKash redirects the browser here
 - `GET payments/bkash/status/<transaction_id>/` — check payment status
 - `POST payments/bkash/refund/` — refund (admin)
+
+### Manual bKash Send Money (admin-verified)
+Customer sends money via bKash Send Money to a platform number, submits the
+trx ID + sender number. Admin reviews and approves in the admin panel.
+
+#### `POST payments/manual-bkash/submit/`
+**Customer only.** Submit a manual bKash payment for admin verification.
+```json
+{
+  "order_id": 1,
+  "payment_type": "advance",
+  "trx_id": "9A8B7C6D5E",
+  "sender_number": "01710000000"
+}
+```
+- `payment_type`: `"advance"` (50%) or `"final"` (50%)
+- `sender_number`: the bKash number the money was sent FROM
+- `amount` (optional, admin only): override the auto-calculated amount
+- Response `201`: `{ submission_id, order_id, payment_type, amount, trx_id, sender_number, status: "pending" }`
+- Duplicate check is per **(trx_id, order_id, payment_type)** — same trx_id can be used for different orders or different payment types.
+
+#### `GET payments/manual-bkash/list/`
+**Admin only.** List all manual bKash submissions.
+Query param: `?status=pending|approved|rejected`
+Response: array of submission objects.
+
+#### `POST payments/manual-bkash/<id>/approve/`
+**Admin only.** Approve a pending submission. Creates a Payment record, links
+to the order, updates order payment flags, appends settlement XLSX.
+The Payment.transaction_id is stored as `MANUAL-{trx_id}-O{order_id}`.
+```json
+{ "note": "Verified on bKash portal" }
+```
+Response: `{ id, status: "approved", payment_id, order_id }`
+
+#### `POST payments/manual-bkash/<id>/reject/`
+**Admin only.** Reject a pending submission.
+```json
+{ "note": "Trx ID not found" }
+```
+Response: `{ id, status: "rejected" }`
 
 ---
 
@@ -232,7 +324,7 @@ Response `201`: array of created (completed-payment) orders.
 ```
 `uploaded_images` (up to 3) for multipart. Rules:
 - Rating must be 1–5.
-- Requires a **completed** order for that post.
+- Requires a **completed** order containing an `OrderItem` for that post (checked via `OrderItem`).
 - **Duplicate reviews blocked** (one per customer per post) → `400` `{ "non_field_errors": "You have already reviewed this product." }`
 
 ### `GET reviews/`
@@ -254,7 +346,7 @@ Review object:
 ## Farmer wallet
 
 ### `GET farmer/wallet/`
-**Farmer only.** Response:
+**Farmer only.** Queries via `OrderItem.farmer`. Response:
 ```json
 {
   "pending_payouts": "500.00",
@@ -263,6 +355,8 @@ Review object:
   "recent_transactions": [ { order... }, ... ]
 }
 ```
+- `pending_payouts`: sum of `OrderItem.subtotal` for orders with status `pending`/`approved`, advance paid but final not yet paid.
+- `total_earnings`: sum of `OrderItem.subtotal` for all orders (all statuses).
 
 ---
 
@@ -302,6 +396,57 @@ Batch object:
 
 ---
 
+## Notifications (real-time delivery updates)
+
+Backend stores delivery handover notifications that the app polls for real-time
+updates. A future FCM/websocket layer can push the same records to devices.
+
+### `GET notifications/`
+**Auth required.** Returns the logged-in user's notifications, newest first.
+Created automatically on batch events: `batch_assigned`, `batch_picked_up`,
+`batch_in_transit`, `payment_verified`, `batch_delivered`.
+
+### `GET notifications/unread_count/`
+**Auth required.** → `{ "unread_count": 3 }`
+
+### `POST notifications/<id>/read/`
+**Auth required.** Marks one notification read.
+
+### `POST notifications/read_all/`
+**Auth required.** Marks all the user's notifications read → `{ "status": "ok" }`.
+
+Notification object:
+```json
+{
+  "id": 1, "notification_type": "batch_delivered",
+  "title": "Batch #12 delivered",
+  "message": "Your order has been delivered...",
+  "batch_id": 12, "order_id": 34, "is_read": false,
+  "created_at": "..."
+}
+```
+
+---
+
+## Farmer-due settlement (admin checkbox)
+
+The settlement XLSX + CORPnet BEFTN export exist; this is the **backend** that the
+website admin portal's tick-box interface calls to mark a farmer's payout as paid.
+Dues are now computed per-OrderItem (one row per farmer per order).
+
+### `GET payments/settlement/dues/?unpaid=true`
+**Admin only.** Lists farmer-due settlement rows, one per OrderItem per order.
+`unpaid=true` (default) returns only rows whose farmer payout is **not**
+yet marked paid. Row includes `farmer_id`, `farmer_name`, `order_id`,
+`payout_amount` (OrderItem.subtotal), `settlement_appended`, `settlement_paid`,
+`settlement_paid_at`.
+
+### `POST payments/settlement/dues/`
+**Admin only.** Mark a payment's farmer payout as settled/paid (or unmark it).
+Body: `{ "payment_id": 123, "paid": true }`. Returns the updated row.
+
+---
+
 ## Admin analytics
 
 ### `GET admin/analytics/`
@@ -332,9 +477,19 @@ Batch object:
 | List posts | GET | `posts/` |
 | Create post | POST | `posts/` |
 | Search posts | GET | `posts/search_by_keyword/?q=...&union=...` |
-| Create order | POST | `orders/` |
-| Bulk create | POST | `orders/bulk_create/` |
+| My notifications | GET | `notifications/` |
+| Unread count | GET | `notifications/unread_count/` |
+| Mark notif read | POST | `notifications/<id>/read/` |
+| Mark all read | POST | `notifications/read_all/` |
+| Settlement dues | GET | `payments/settlement/dues/` |
+| Mark due paid | POST | `payments/settlement/dues/` |
+| Create order | POST | `orders/` (items[]) |
+| Bulk create | POST | `orders/bulk_create/` (items[]) |
 | **Demo pay** | POST | `payments/demo/` |
+| Manual bKash submit | POST | `payments/manual-bkash/submit/` |
+| Manual bKash list | GET | `payments/manual-bkash/list/` |
+| Manual bKash approve | POST | `payments/manual-bkash/<id>/approve/` |
+| Manual bKash reject | POST | `payments/manual-bkash/<id>/reject/` |
 | Review | POST | `reviews/` |
 | Farmer wallet | GET | `farmer/wallet/` |
 | Areas | GET | `areas/` |
@@ -353,6 +508,7 @@ Batch object:
 - **Re-login on 401** — tokens rotate on every login.
 - **Images:** send via `multipart/form-data` (FormData) with field `uploaded_images` (max 3). In React Native: `formData.append('uploaded_images', { uri, name, type })`.
 - **Money/quantity are strings** (decimal) in responses — parse with `Number()` / `parseFloat`.
-- **Orders complete** only after a batch is delivered (or the order is completed directly). Reviews require a completed order.
+- **Orders are multi-product.** Each order has an `items[]` array. Use `items` for per-product details; the top-level legacy fields (`post_title`, `quantity_kg`, etc.) reflect the first item only.
+- **Orders complete** only after a batch is delivered (or the order is completed directly). Reviews require a completed order with an `OrderItem` for that post.
 - **403** on payment/role-gated actions usually means the token's role doesn't match the endpoint.
 - Production base URL: `https://nobannoapp.online/api/`.

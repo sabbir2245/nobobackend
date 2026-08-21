@@ -22,7 +22,7 @@ from .views import landing_page
 
 urlpatterns = [
     path('', landing_page, name='landing'),
-    path('admin/', admin.site.urls),
+    path('1128d17d158808612380249f51aaf85395f1db7c403ff6a8/', admin.site.urls),
     path('api/', include('api.urls')),
 ]
 

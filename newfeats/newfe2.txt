@@ -1,0 +1,236 @@
+Conversation with Gemini
+
+# Feature & Requirements Checklist
+
+
+- [ ] **Time Availability**: Time availability (data type numerical) option in farmer's post.
+
+- [ ] **Bidding & Negotiation System**:
+
+- Customer 1 ta bid korte parbe, then notification jabe farmer er kase.
+
+- Farmer 1 ta last price dite parbe (counter bid only 1 under a question box saying like *"কত হলে বেচবেন?"*).
+
+- Then customer er kase notification jabe with option of **"confirm"** or **"reject"**.
+
+- [ ] **Customer Reviews**: Review of customers will remain in farmers profile (with pictures intact).
+
+- [ ] **Advance Payment Flow (50% Payment)**:
+
+- Customer check out option pabe > payment (total payment er half) > "1 ta bKash number show korbe"...
+
+- Customer oi number manually jeye send money korbe and transaction id copy kore ene app e input dibe (trx id er interface uddoktaPay dey and auto check kore) > payment confirmation.
+
+- *(uddoktaPay er kaaj ta e tumi goto kakke bolsila j "sms er thru extracted trx id and customer er input kora trx id cross check kore payment confirm kora jay")* - u can try to make the uddoktaPay urself.
+
+- Spreadsheet generates (containing the due of advance of the farmer) in admin portal.
+
+- [ ] **Order Shipment & Final Payment (Remaining 50%)**:
+
+- Order shipment e thakar somoy customer er dashboard e option thakbe **"Complete your payment to recieve the order"**.
+
+- Eikhane click kore same ager method ei (uddoktaPay) customer baki taka pay korbe.
+
+- Again confirmation ashbe admin panel e + confirmation msz jabe delivery guy er kase so that he will hand over the product to customer.
+
+- Farmer er baki due (rest 50%) er list generate hobe jeikhane ami manually bkash e send money kore kore checkerbox e tik dibo.
+
+convert to english
+
+    [ ] Time Availability: Add a time availability field (numerical data type) to the farmer's post.
+
+    [ ] Bidding & Negotiation System:
+
+        The customer can place 1 bid, triggering a notification to the farmer.
+
+        The farmer can submit a final price (only 1 counter-bid, prompted by a question box such as "What is your final price?").
+
+        A notification is then sent to the customer with options to "Confirm" or "Reject".
+
+    [ ] Customer Reviews: Customer reviews (including attached pictures) will be saved and displayed on the farmer's profile.
+
+    [ ] Advance Payment Flow (50% Payment):
+
+        Customer gets a checkout option > Proceeds to pay 50% of the total amount > System displays a bKash number.
+
+        Customer manually sends money to that number via bKash, copies the transaction ID, and inputs it into the app (the UddoktaPay interface handles the input and auto-verifies the TrxID).
+
+        (UddoktaPay alternative: Automatically cross-check the customer's inputted TrxID against the TrxID extracted from payment SMS logs to confirm the transaction).
+
+        A spreadsheet is generated in the admin portal displaying the farmer's remaining advance payout balance.
+
+    [ ] Order Shipment & Final Payment (Remaining 50%):
+
+        While the order is in transit, the customer's dashboard will display an option: "Complete your payment to receive the order".
+
+        Clicking this allows the customer to pay the remaining balance using the same UddoktaPay/bKash method.
+
+        A payment confirmation is sent to the admin panel and a confirmation message is dispatched to the delivery agent authorizing product handover.
+
+        A final list generates for the farmer's remaining 50% due, where payouts can be sent manually via bKash and marked off using a checkbox.
+
+[11:34 AM, 8/17/2026] Sazid: ije failed jei request gula..kno failed seita mention na korle may be krishok bujhbe nah
+
+[11:36 AM, 8/17/2026] Sazid: Hae eibar hoise
+
+[11:36 AM, 8/17/2026] Sazid: Same mail or phone number use kora jabe nah
+
+[11:37 AM, 8/17/2026] Sazid: Error message e eita add kora dorkar "notun email/phone number bebohar korun" in deliveryman Eikhane batch gula location wise distance ta km e show kora dorkar and closest distance er ta upore ashbe delivery man er dashboard e (just like the posts of farmers in customers dashboard)"Accept batch" e click korar por only option is appearing "Delivered at union- Mark complete" 
+
+
+Eikhane option thakbe "picked the batch at union- Mark complete"
+
+
+And status "delivered" er bodle show korte hobe "on board/on shipping/shipped"
+
+
+Then delivery man er kase ekta confirmation option thakbe j "Payment completed by customer".finally jokhon customer er haate maal tule dibe and customer tar maal paia payment complete korbe tokhon delivery guy oitay click korle ami admin sure hoite parbo j customer tar baki taka dise...
+
+finally delivery guy er kase option show hobe "Delivered to customer- Mark Complete" and status show hobe 'Delivered' sanitize the text . make a combined txt file
+
+Your sanitized text file containing all merged and cleaned requirements has been generated:
+TXT icon
+Agricultural_Platform_Requirements_Updated
+ TXT 
+Summary of Consolidated Requirements
+1. Bidding & Negotiation System
+
+    Time Availability: Numerical field in farmer posts.
+
+    Bidding Flow:
+
+        Customer submits 1 bid → Farmer gets notified.
+
+        Farmer provides 1 counter-bid / final price (prompted by "What is your final price?").
+
+        Customer receives notification to "Confirm" or "Reject".
+
+    Failed Requests: Clear error messages explaining why a request failed so the farmer understands the outcome.
+
+2. User Profile & Account Validation
+
+    Customer Reviews: Display reviews along with attached photos directly on the farmer's profile.
+
+    Account Uniqueness: Prevent duplicate registration using the same email or phone number.
+
+    Error Messaging: Show clear guidance upon duplicate registration: "Please use a new email/phone number" ("নতুন ইমেইল/ফোন নম্বর ব্যবহার করুন").
+
+3. Deliveryman Dashboard & Batch Management
+
+    Distance Sorting: Show distance in kilometers (km) for batches on the delivery dashboard; sort batches closest-first (matching customer post sorting).
+
+    Delivery Workflow Stages:
+
+        Pickup: Change action button to "Picked the batch at union - Mark Complete".
+
+        In-Transit Status: Set status to "On Board / In Transit / Shipped" (instead of marking as delivered prematurely).
+
+        Payment Verification: Include a deliveryman toggle for "Payment completed by customer" upon handing over goods, giving admins visual confirmation of cash/digital settlement.
+
+        Final Handover: Complete order with "Delivered to customer - Mark Complete", switching status to "Delivered".
+
+4. Payment & Escrow Flow (50% Advance + 50% Final)
+
+    Advance Payment (50%):
+
+        Customer checks out and opts for 50% advance → bKash details shown.
+
+        Customer transfers funds manually, inputs Transaction ID (TrxID) in-app.
+
+        Auto Verification: System matches customer's input against incoming payment SMS logs (TrxID cross-check).
+
+        Admin Tracking: Auto-generates an advance payout tracking sheet for farmers in the admin portal.
+
+    Final Payment & Settlement (Remaining 50%):
+
+        Customer dashboard displays "Complete your payment to receive the order" while package is in transit.
+
+        Customer settles remaining balance via verified bKash flow.
+
+        Admin panel and deliveryman receive instant payment confirmation signals authorizing product handover.
+
+        System updates admin portal with remaining 50% farmer payout balances; admin manually distributes funds via bKash and checks off completion boxes.
+
+
+Gemini is AI and can make mistakes.
+Analysing
+
+================================================================================
+                    AGRICULTURAL PLATFORM - UPDATED REQUIREMENTS
+================================================================================
+
+1. BIDDING & NEGOTIATION SYSTEM
+--------------------------------------------------------------------------------
+* Farmer Post Field:
+  - Add "Time Availability" field (Numerical data type) to the farmer's post.
+
+* Bidding Flow:
+  - Customer places 1 bid -> Sends a notification to the farmer.
+  - Farmer responds with 1 counter-bid / final price (prompted by a prompt 
+    such as "What is your final price?").
+  - Customer receives a notification with options to "Confirm" or "Reject".
+  - Failed Requests / Bids: Display specific failure reasons so the farmer 
+    understands why a request or bid failed.
+
+2. USER PROFILE & VALIDATION
+--------------------------------------------------------------------------------
+* Farmer Profile:
+  - Display customer reviews along with attached review images on the farmer's profile.
+
+* Validation & Error Handling:
+  - Prevent duplicate account creation using the same email or phone number.
+  - Display explicit error message: "Please use a new email/phone number" 
+    ("নতুন ইমেইল/ফোন নম্বর ব্যবহার করুন").
+
+3. DELIVERYMAN DASHBOARD & BATCH MANAGEMENT
+--------------------------------------------------------------------------------
+* Batch Sorting & Distance Display:
+  - Calculate and display location-based distance in kilometers (km) for each batch.
+  - Sort batches by proximity (closest batch appears at the top), matching the 
+    post-sorting logic used in the customer dashboard.
+
+* Delivery Lifecycle & Status Updates:
+  - Step 1 (Pickup):
+    Replace single "Delivered at union" prompt with: 
+    "Picked the batch at union - Mark Complete".
+  - Step 2 (In Transit):
+    Update order status to "On Board" / "In Transit" / "Shipped" (instead of "Delivered").
+  - Step 3 (Payment Verification at Handover):
+    Provide a deliveryman confirmation prompt: "Payment completed by customer".
+    When the deliveryman hands over the product and the customer completes the 
+    final payment, the deliveryman toggles this option to verify remaining payment 
+    to the admin.
+  - Step 4 (Final Handover):
+    Display final action button: "Delivered to customer - Mark Complete".
+    Update order status to 'Delivered'.
+
+4. PAYMENT & ESCROW FLOW (ADVANCE + FINAL PAYOUTS)
+--------------------------------------------------------------------------------
+* Advance Payment Flow (50% Payment):
+  - Customer selects Checkout -> Chooses 50% advance payment option.
+  - System displays designated bKash account details.
+  - Customer transfers funds via bKash manually, copies Transaction ID (TrxID), 
+    and submits it in the app.
+  - Payment Auto-Verification (UddoktaPay / Custom SMS Verification):
+    System auto-verifies customer-submitted TrxID against incoming payment SMS logs.
+  - Admin Payout Spreadsheet:
+    Automatically generates a spreadsheet in the admin portal tracking the 50% 
+    payout due to farmers.
+
+* Final Payment & Order Handover (Remaining 50%):
+  - In-Transit Prompt:
+    Customer dashboard displays "Complete your payment to receive the order".
+  - Payment Submission:
+    Customer pays remaining 50% balance via the same verified bKash payment process.
+  - Confirmation Signals:
+    - Admin panel receives payment confirmation notification.
+    - Delivery agent receives confirmation notice authorizing product release.
+    - Delivery agent confirms "Payment completed by customer" upon physical delivery.
+  - Farmer Final Settlement:
+    System generates a final 50% payout balance list for farmers in the admin portal.
+    Admin manually transfers funds via bKash and marks checkboxes to record payouts.
+
+================================================================================
+
+Agricultural_Platform_Requirements_Updated.txt
+Displaying Agricultural_Platform_Requirements_Updated.txt.

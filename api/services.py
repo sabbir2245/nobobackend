@@ -4,7 +4,7 @@ from decimal import Decimal
 from django.db import transaction
 from django.db.models import Q
 
-from .models import Area, PendingPool, Batch, BatchItem, Order
+from .models import Area, PendingPool, Batch, BatchItem, Order, OrderItem
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -41,20 +41,23 @@ def area_for_post(post):
 
 
 def build_batch(area, union, product_type):
-    """Bundle all pending contributing orders for this union+product into a Batch."""
-    contributing_orders = list(
-        Order.objects.filter(
-            status='pending',
+    """Bundle all approved contributing OrderItems for this union+product into a Batch.
+
+    Each OrderItem becomes a BatchItem, linked to the batch via its parent Order.
+    """
+    contributing_items = list(
+        OrderItem.objects.filter(
+            order__status='approved',
             post__location=union,
             post__product_type=product_type,
             batch_items__isnull=True,
-        ).select_related('post__farmer')
+        ).select_related('order', 'post', 'farmer')
     )
-    if not contributing_orders:
+    if not contributing_items:
         return None
 
-    total_qty = sum((o.quantity_kg for o in contributing_orders), Decimal('0'))
-    total_value = sum((o.total_paid for o in contributing_orders), Decimal('0'))
+    total_qty = sum((item.effective_weight_kg for item in contributing_items), Decimal('0'))
+    total_value = sum((item.subtotal for item in contributing_items), Decimal('0'))
 
     batch = Batch.objects.create(
         area=area,
@@ -64,46 +67,85 @@ def build_batch(area, union, product_type):
         total_value=total_value,
         status='pending',
     )
-    for order in contributing_orders:
+    for item in contributing_items:
         BatchItem.objects.create(
             batch=batch,
-            order=order,
-            quantity_kg=order.quantity_kg,
-            farmer=order.post.farmer,
+            order=item.order,
+            quantity_kg=item.effective_weight_kg,
+            farmer=item.farmer,
         )
     return batch
 
 
 def add_order_to_pool(order):
-    """Increment the pending pool for the order's area→union + product.
+    """Feed each OrderItem in an approved order into the pooling/batching engine.
 
-    Runs inside the caller's transaction (with row locking on the pool). Creates a
-    Batch when the pool reaches the area threshold, then resets the pool to zero.
+    Each item goes to its own pool (area + union + product_type). When a pool
+    reaches the area threshold, a Batch is created.
     """
-    post = order.post
-    area = area_for_post(post)
-    if area is None:
+    if order.status != 'approved':
         return
 
-    union = post.location
+    for item in order.items.select_related('post').all():
+        post = item.post
+        area = area_for_post(post)
+        if area is None:
+            continue
 
-    pool, created = PendingPool.objects.select_for_update().get_or_create(
-        area=area,
-        union=union,
-        product_type=post.product_type,
-        defaults={'pending_quantity_kg': order.quantity_kg},
-    )
-    if not created:
-        pool.pending_quantity_kg += order.quantity_kg
-        pool.save(update_fields=['pending_quantity_kg'])
+        union = post.location
 
-    if pool.pending_quantity_kg >= area.threshold_kg:
-        build_batch(area, union, post.product_type)
-        pool.pending_quantity_kg = Decimal('0')
-        pool.save(update_fields=['pending_quantity_kg'])
+        pool, created = PendingPool.objects.select_for_update().get_or_create(
+            area=area,
+            union=union,
+            product_type=post.product_type,
+            defaults={'pending_quantity_kg': item.effective_weight_kg},
+        )
+        if not created:
+            pool.pending_quantity_kg += item.effective_weight_kg
+            pool.save(update_fields=['pending_quantity_kg'])
+
+        if pool.pending_quantity_kg >= area.threshold_kg:
+            build_batch(area, union, post.product_type)
+            pool.pending_quantity_kg = Decimal('0')
+            pool.save(update_fields=['pending_quantity_kg'])
 
 
 def process_new_order(order):
     """Helper to be called after an Order is created."""
     with transaction.atomic():
         add_order_to_pool(order)
+
+
+def notify_batch_users(batch, notification_type, title, message=None):
+    """Create a Notification for every user affected by a batch event.
+
+    Notified users: the customers of every order in the batch, the batch's
+    farmers (via BatchItem), and the assigned deliveryman. Returns the list of
+    created Notification objects.
+    """
+    from .models import Notification, Order
+
+    users = set()
+    order_ids = []
+
+    for item in batch.items.select_related('order', 'farmer').all():
+        order = item.order
+        if order:
+            users.add(order.customer_id)
+            order_ids.append(order.id)
+        users.add(item.farmer_id)
+    if batch.deliveryman_id:
+        users.add(batch.deliveryman_id)
+
+    notifications = []
+    for user_id in users:
+        notification = Notification.objects.create(
+            user_id=user_id,
+            notification_type=notification_type,
+            title=title,
+            message=message or '',
+            batch=batch,
+            order_id=order_ids[0] if order_ids else None,
+        )
+        notifications.append(notification)
+    return notifications

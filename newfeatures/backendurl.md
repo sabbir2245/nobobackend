@@ -12,7 +12,7 @@ backend, auth, and the full API surface.
 | Local dev    | `http://localhost:8000/api/` |
 | Production   | `https://yourdomain.com/api/` (replace with the real domain) |
 
-- **Admin panel:** `http://localhost:8000/admin/`
+- **Admin panel:** `http://localhost:8000/1128d17d158808612380249f51aaf85395f1db7c403ff6a8/` (obfuscated path)
 - **API browser (browsable API):** `http://localhost:8000/api/`
 
 > All endpoints below are relative to the base URL (they already include `/api/`).
@@ -84,6 +84,8 @@ Deletes the current token. `Authorization` header required.
 - `GET posts/` — list, filters: `?search=`, `?product_type=`, `?farmer_id=`, `?area=`, `?upazila=`, `?district=`, `?union=<customer_union_id>` (adds `distance_km`)
 - `POST posts/` — farmer only; body includes `location` (union/upazila id)
 - `GET posts/<id>/`
+- `DELETE posts/<id>/` — **soft delete**: hides the post (`is_visible=false`) instead of removing it, so orders/payments/reviews stay intact. Hidden posts are excluded from public lists but the owning farmer still sees theirs.
+- Expired posts (past `time_availability` hours) are also hidden; run `python manage.py expire_posts` (or schedule via cron) to flip them.
 
 ### Areas (admin)
 - `GET areas/` — public list
@@ -135,6 +137,27 @@ buy flow without touching the payment gateway.
 - `GET payments/bkash/callback/?paymentID=...&status=...` — bKash redirects here
 - `GET payments/bkash/status/<transaction_id>/` — check status
 - `POST payments/bkash/refund/` — refund
+
+### UddoktaPay (auto-verified escrow: 50% advance + 50% final)
+Flow: customer pays the 50% **advance** first; after delivery pays the 50%
+**final**. UddoktaPay auto-verifies the TrxID and pings your webhook — no manual
+TrxID entry needed.
+
+- `POST payments/uddoktapay/checkout/` — **authenticated (customer)**. Body:
+  ```json
+  { "order_id": 1, "payment_type": "advance" }   // or "final"
+  ```
+  Returns `{ payment_id, order_id, payment_type, amount, invoice_id, payment_url, status }`.
+  Redirect the user to `payment_url`. Final is blocked until advance is paid.
+- `POST payments/uddoktapay/webhook/` — **public** (UddoktaPay calls this in the
+  background). Header `RT-UDDOKTAPAY-API-KEY` must match. Marks advance/final paid.
+- `GET payments/uddoktapay/verify/<invoice_id>/` — **authenticated**. Manual
+  fallback polling if the webhook is delayed.
+- `GET payments/uddoktapay/redirect/<success|cancel>/` — lightweight redirect
+  targets for the hosted payment page.
+
+> Webhook URL to configure in your UddoktaPay dashboard:
+> `https://nobannoapp.online/api/payments/uddoktapay/webhook/`
 
 ---
 

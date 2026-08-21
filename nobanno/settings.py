@@ -174,6 +174,19 @@ SSLCOMMERZ_STORE_PASSWORD = os.environ.get('SSLCOMMERZ_STORE_PASSWORD', 'qwerty'
 SSLCOMMERZ_IS_SANDBOX = os.environ.get('SSLCOMMERZ_IS_SANDBOX', 'true').lower() == 'true'
 CLOUDFLARE_TUNNEL_URL = os.environ.get('CLOUDFLARE_TUNNEL_URL')
 
+# ── UDDOKTAPAY PAYMENT GATEWAY ─────────────────────────────────────────────
+# UddoktaPay is a Bangladesh MFS aggregator (bKash/Nagad/Rocket) that
+# auto-verifies "Send Money" TrxIDs via webhook — replacing the insecure
+# manual TrxID flow for the escrow advance/final payments.
+# Docs: https://uddoktapay.readme.io
+UDDOKTAPAY_API_KEY = os.environ.get('UDDOKTAPAY_API_KEY', '')
+UDDOKTAPAY_BASE_URL = os.environ.get(
+    'UDDOKTAPAY_BASE_URL', 'https://sandbox.uddoktapay.com')
+# Public base used to build the webhook/redirect URLs handed to UddoktaPay.
+# Falls back to CLOUDFLARE_TUNNEL_URL, then the request host.
+UDDOKTAPAY_PUBLIC_BASE_URL = os.environ.get(
+    'UDDOKTAPAY_PUBLIC_BASE_URL', '') or (CLOUDFLARE_TUNNEL_URL or '')
+
 # Media configuration
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.environ.get('MEDIA_ROOT', str(BASE_DIR / 'timage'))
@@ -196,6 +209,7 @@ JAZZMIN_SETTINGS = {
     "search_model": ["api.User", "api.Post", "api.Order"],
     "topmenu_links": [
         {"name": "Dashboard", "url": "admin:stats", "permissions": ["is_staff"]},
+        {"name": "Farmer Dues", "url": "admin:farmer-due", "permissions": ["is_staff"]},
         {"name": "API Browser", "url": "/api/", "permissions": ["is_staff"], "new_window": True},
     ],
     "icons": {
@@ -210,6 +224,7 @@ JAZZMIN_SETTINGS = {
         "api.Payment": "fas fa-credit-card",
         "api.FarmerBankAccount": "fas fa-university",
         "api.BangladeshLocation": "fas fa-map-marker-alt",
+        "api.Notification": "fas fa-bell",
     },
     "order_with_respect_to": [
         "api.User",

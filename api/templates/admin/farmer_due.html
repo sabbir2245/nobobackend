@@ -1,0 +1,101 @@
+{% extends "admin/base.html" %}
+{% load i18n static %}
+
+{% block title %}Farmer Dues {{ block.super }}{% endblock %}
+
+{% block extrastyle %}
+{{ block.super }}
+<style>
+  #header { display: none !important; }
+  #content { padding-top: 10px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid p-3">
+
+  <h1 class="h3 mb-4"><i class="fas fa-wallet me-2 text-success"></i>Farmer Dues</h1>
+
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+      <p class="text-muted mb-0">
+        Farmers who have orders with successful payments but haven't been paid out yet.
+        Amount shown is <strong>90%</strong> of what the customer paid (platform keeps 10%).
+      </p>
+    </div>
+  </div>
+
+  {% if farmers %}
+  {% for entry in farmers %}
+  <div class="card border-0 shadow-sm mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center" style="background:#198754; color:#fff;">
+      <div>
+        <strong class="fs-5 text-white">{{ entry.farmer.name|default:entry.farmer.username }}</strong>
+        <span class="ms-2" style="color:#d4edda;">({{ entry.farmer.username }})</span>
+        {% if entry.farmer.bkash_number %}
+          <span class="badge bg-light text-success ms-2">bKash: {{ entry.farmer.bkash_number }}</span>
+        {% else %}
+          <span class="badge bg-light text-secondary ms-2">No bKash</span>
+        {% endif %}
+      </div>
+      <div class="text-end">
+        <span class="fw-bold fs-5 text-white">{{ entry.total_pending|floatformat:2 }} ৳</span>
+        <form method="post" action="{% url 'admin:farmer-due-mark' %}" class="d-inline ms-2">
+          {% csrf_token %}
+          <input type="hidden" name="farmer_id" value="{{ entry.farmer.id }}">
+          <button type="submit" class="btn btn-sm btn-light fw-semibold">
+            <i class="fas fa-check me-1"></i>Mark Paid
+          </button>
+        </form>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <table class="table table-sm table-hover align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Order</th>
+            <th>Product</th>
+            <th class="text-end">Quantity</th>
+            <th class="text-end">Price/kg</th>
+            <th class="text-end">Subtotal</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in entry.items %}
+          <tr>
+            <td><a href="{% url 'admin:api_order_change' item.order_id %}">#{{ item.order_id }}</a></td>
+            <td>{{ item.post.title }}</td>
+            <td class="text-end">{{ item.quantity_kg }} {% if item.quantity_type == 'piece' %}pcs{% else %}kg{% endif %}</td>
+            <td class="text-end">৳{{ item.price_per_kg }}</td>
+            <td class="text-end fw-bold">৳{{ item.subtotal }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="card border-0 shadow-sm" style="background:#198754;">
+    <div class="card-body text-end">
+      <strong class="fs-5 text-white">Total Pending: {{ total_pending|floatformat:2 }} ৳</strong>
+    </div>
+  </div>
+  {% else %}
+  <div class="card border-0 shadow-sm">
+    <div class="card-body text-center py-5">
+      <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
+      <h5>All farmers are paid up!</h5>
+      <p class="text-muted">No pending dues at this time.</p>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="mt-3">
+    <a href="{% url 'admin:stats' %}" class="btn btn-outline-secondary">
+      <i class="fas fa-arrow-left me-1"></i>Back to Dashboard
+    </a>
+  </div>
+
+</div>
+{% endblock %}

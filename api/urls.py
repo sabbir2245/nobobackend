@@ -9,6 +9,7 @@ from .views import (
     ProductTypeViewSet,
     BangladeshLocationView, AssignServiceAreaView,
     AreaViewSet, BatchViewSet, DemoPayView,
+    BidViewSet, NotificationViewSet, SettlementDueView,
 )
 from .update import UserUpdateView, PostUpdateView
 from .payments import (
@@ -16,6 +17,15 @@ from .payments import (
     BKashPaymentSuccessView, BKashPaymentFailView,
     BKashPaymentStatusView, BKashPaymentRefundView,
     BEFTNInvoiceView, SettlementDownloadView,
+    BKashEscrowTrxView,
+)
+from .uddoktapay_views import (
+    UddoktaPayCheckoutView, UddoktaPayWebhookView,
+    UddoktaPayVerifyView, UddoktaPayRedirectView,
+)
+from .manual_bkash import (
+    ManualBkashSubmitView, ManualBkashListView,
+    ManualBkashApproveView, ManualBkashRejectView,
 )
 
 router = DefaultRouter()
@@ -23,9 +33,11 @@ router.register(r'users', UserManagementViewSet, basename='user-mgmt')
 router.register(r'posts', PostViewSet, basename='posts')
 router.register(r'orders', OrderViewSet, basename='orders')
 router.register(r'reviews', ReviewViewSet, basename='reviews')
+router.register(r'bids', BidViewSet, basename='bids')
 router.register(r'product-types', ProductTypeViewSet, basename='product-types')
 router.register(r'areas', AreaViewSet, basename='areas')
 router.register(r'batches', BatchViewSet, basename='batches')
+router.register(r'notifications', NotificationViewSet, basename='notifications')
 
 urlpatterns = [
     # Router endpoints
@@ -58,7 +70,21 @@ urlpatterns = [
     path('payments/bkash/status/<str:transaction_id>/', BKashPaymentStatusView.as_view(), name='bkash-payment-status'),
     path('payments/bkash/refund/', BKashPaymentRefundView.as_view(), name='bkash-payment-refund'),
     path('payments/demo/', DemoPayView.as_view(), name='demo-pay'),
+    path('payments/escrow/trx/', BKashEscrowTrxView.as_view(), name='escrow-trx'),
     path('payments/settlement/download/', SettlementDownloadView.as_view(), name='settlement-download'),
+    path('payments/settlement/dues/', SettlementDueView.as_view(), name='settlement-dues'),
+
+    # ── MANUAL BKASH (customer submit → admin approve flow) ──────────────────
+    path('payments/manual-bkash/submit/', ManualBkashSubmitView.as_view(), name='manual-bkash-submit'),
+    path('payments/manual-bkash/list/', ManualBkashListView.as_view(), name='manual-bkash-list'),
+    path('payments/manual-bkash/<int:pk>/approve/', ManualBkashApproveView.as_view(), name='manual-bkash-approve'),
+    path('payments/manual-bkash/<int:pk>/reject/', ManualBkashRejectView.as_view(), name='manual-bkash-reject'),
+
+    # ── UDDOKTAPAY (MFS aggregator — auto-verified TrxID escrow flow) ────────
+    path('payments/uddoktapay/checkout/', UddoktaPayCheckoutView.as_view(), name='uddoktapay-checkout'),
+    path('payments/uddoktapay/webhook/', UddoktaPayWebhookView.as_view(), name='uddoktapay-webhook'),
+    path('payments/uddoktapay/verify/<str:invoice_id>/', UddoktaPayVerifyView.as_view(), name='uddoktapay-verify'),
+    path('payments/uddoktapay/redirect/<str:outcome>/', UddoktaPayRedirectView.as_view(), name='uddoktapay-redirect'),
 
     # ── BEFTN CSV INVOICE (Leg 2: Admin → Farmer bank settlement) ───────────
     path('payments/beftn/invoice/', BEFTNInvoiceView.as_view(), name='beftn-invoice'),

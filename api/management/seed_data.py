@@ -159,31 +159,31 @@ class Command(BaseCommand):
             username="fjamal", email="jamal@farms.com", password="F1",
             role="farmer", name="Jamal Uddin", phone_number="01712345678",
             address="Aminbazar Wholesale Market, Savar, Dhaka",
-            location=union_obj(3282), is_verified=True,
+            location=union_obj(3282), is_verified=True, bkash_number="01712345678",
         )
         f2 = User.objects.create_user(
             username="frahim", email="rahim@bogura.com", password="F2",
             role="farmer", name="Rahim Mia", phone_number="01812345678",
             address="Garidaha, Sherpur, Bogura",
-            location=union_obj(1194), is_verified=True,
+            location=union_obj(1194), is_verified=True, bkash_number="01812345678",
         )
         f3 = User.objects.create_user(
             username="fkarim", email="karim@rajshahi.com", password="F3",
             role="farmer", name="Karim Ahmed", phone_number="01612345678",
             address="Damkura, Paba, Rajshahi",
-            location=union_obj(1216), is_verified=True,
+            location=union_obj(1216), is_verified=True, bkash_number="01612345678",
         )
         f4 = User.objects.create_user(
             username="fselim", email="selim@jashore.com", password="F4",
             role="farmer", name="Selim Hossain", phone_number="01512345678",
             address="Benapole, Sharsha, Jashore",
-            location=union_obj(1596), is_verified=True,
+            location=union_obj(1596), is_verified=True, bkash_number="01512345678",
         )
         f5 = User.objects.create_user(
             username="farif", email="arif@comilla.com", password="F5",
             role="farmer", name="Arif Chowdhury", phone_number="01998765432",
             address="Mokara, Nangalkot, Comilla",
-            location=union_obj(120), is_verified=True,
+            location=union_obj(120), is_verified=True, bkash_number="01998765432",
         )
         for f in [f1, f2, f3, f4, f5]:
             Token.objects.create(user=f)
@@ -192,7 +192,7 @@ class Command(BaseCommand):
             username="rahimk", email="rahimk@restaurant.com", password="C",
             role="customer", name="ratul", phone_number="01912345678",
             address="Aminbazar, Savar, Dhaka",
-            location=union_obj(3282), is_verified=True,
+            location=union_obj(3282), is_verified=True, bkash_number="01712345678",
         )
         c2 = User.objects.create_user(
             username="chasan", email="hasan@retail.com", password="C23",
@@ -372,6 +372,7 @@ class Command(BaseCommand):
 
         def make_order(customer, post, qty):
             """Create a pending order and feed its post's area→union+product pool."""
+            from api.models import OrderItem
             with transaction.atomic():
                 qty_dec = Decimal(str(qty))
                 total = round(qty_dec * Decimal(str(post.price_per_kg)), 2)
@@ -379,10 +380,19 @@ class Command(BaseCommand):
                 payout = total - fee
                 post.total_weight_kg = Decimal(str(post.total_weight_kg)) - qty_dec
                 post.save(update_fields=['total_weight_kg'])
+                advance = round(total / 2, 2)
+                final = total - advance
                 order = Order.objects.create(
-                    customer=customer, post=post, quantity_kg=qty_dec, status='pending',
+                    customer=customer, status='pending',
                     total_paid=total, platform_fee=fee, farmer_payout=payout,
                     delivery_address=customer.address or 'Dhaka',
+                    advance_amount=advance, final_amount=final,
+                )
+                OrderItem.objects.create(
+                    order=order, post=post, farmer=post.farmer,
+                    quantity_kg=qty_dec, quantity_type=post.quantity_type,
+                    est_weight_kg=post.est_weight_kg,
+                    price_per_kg=post.price_per_kg, subtotal=total,
                 )
                 process_new_order(order)
                 return order

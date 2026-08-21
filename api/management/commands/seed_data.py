@@ -143,7 +143,7 @@ class Command(BaseCommand):
 
         admin_user = User.objects.create_superuser(
             username="robi",
-            email="nobanno69@gmail.com",
+            email="nobanno.contact@gmail.com",
             password="lifeisso4green@",
             role="admin",
             name="Super Admin",
@@ -159,31 +159,31 @@ class Command(BaseCommand):
             username="fjamal", email="jamal@farms.com", password="F1",
             role="farmer", name="Jamal Uddin", phone_number="01712345678",
             address="Aminbazar Wholesale Market, Savar, Dhaka",
-            location=union_obj(3282), is_verified=True,
+            location=union_obj(3282), is_verified=True, bkash_number="01712345678",
         )
         f2 = User.objects.create_user(
             username="frahim", email="rahim@bogura.com", password="F2",
             role="farmer", name="Rahim Mia", phone_number="01812345678",
             address="Garidaha, Sherpur, Bogura",
-            location=union_obj(1194), is_verified=True,
+            location=union_obj(1194), is_verified=True, bkash_number="01812345678",
         )
         f3 = User.objects.create_user(
             username="fkarim", email="karim@rajshahi.com", password="F3",
             role="farmer", name="Karim Ahmed", phone_number="01612345678",
             address="Damkura, Paba, Rajshahi",
-            location=union_obj(1216), is_verified=True,
+            location=union_obj(1216), is_verified=True, bkash_number="01612345678",
         )
         f4 = User.objects.create_user(
             username="fselim", email="selim@jashore.com", password="F4",
             role="farmer", name="Selim Hossain", phone_number="01512345678",
             address="Benapole, Sharsha, Jashore",
-            location=union_obj(1596), is_verified=True,
+            location=union_obj(1596), is_verified=True, bkash_number="01512345678",
         )
         f5 = User.objects.create_user(
             username="farif", email="arif@comilla.com", password="F5",
             role="farmer", name="Arif Chowdhury", phone_number="01998765432",
             address="Mokara, Nangalkot, Comilla",
-            location=union_obj(120), is_verified=True,
+            location=union_obj(120), is_verified=True, bkash_number="01998765432",
         )
         for f in [f1, f2, f3, f4, f5]:
             Token.objects.create(user=f)
@@ -403,6 +403,7 @@ class Command(BaseCommand):
 
         def make_order(customer, post, qty):
             """Create a pending order and feed its post's area→union+product pool."""
+            from api.models import OrderItem
             with transaction.atomic():
                 qty_dec = Decimal(str(qty))
                 total = round(qty_dec * Decimal(str(post.price_per_kg)), 2)
@@ -410,10 +411,19 @@ class Command(BaseCommand):
                 payout = total - fee
                 post.total_weight_kg = Decimal(str(post.total_weight_kg)) - qty_dec
                 post.save(update_fields=['total_weight_kg'])
+                advance = round(total / 2, 2)
+                final = total - advance
                 order = Order.objects.create(
-                    customer=customer, post=post, quantity_kg=qty_dec, status='pending',
+                    customer=customer, status='pending',
                     total_paid=total, platform_fee=fee, farmer_payout=payout,
                     delivery_address=customer.address or 'Dhaka',
+                    advance_amount=advance, final_amount=final,
+                )
+                OrderItem.objects.create(
+                    order=order, post=post, farmer=post.farmer,
+                    quantity_kg=qty_dec, quantity_type=post.quantity_type,
+                    est_weight_kg=post.est_weight_kg,
+                    price_per_kg=post.price_per_kg, subtotal=total,
                 )
                 process_new_order(order)
                 return order
@@ -509,6 +519,41 @@ class Command(BaseCommand):
         add_payment(o_potato, 'POT')
         add_payment(delivered_batch.items.first().order, 'BAN')
 
+        # 8) MULTI-PRODUCT order from chasan: 3 products from 3 different farmers
+        #    Pending — ready for bKash payment input
+        self.stdout.write("Creating multi-product order for chasan (3 farmers)...")
+        from api.models import OrderItem
+        with transaction.atomic():
+            mp_items = [
+                (p_garlic, f1, Decimal('50')),     # Garlic from Jamal (Savar)
+                (p_cucumber, f2, Decimal('80')),    # Cucumber from Rahim (Bogura)
+                (p_chili, f3, Decimal('10')),       # Chili from Karim (Rajshahi)
+            ]
+            mp_total = Decimal('0')
+            for mp_post, mp_farmer, mp_qty in mp_items:
+                mp_total += round(mp_qty * mp_post.price_per_kg, 2)
+                mp_post.total_weight_kg -= mp_qty
+                mp_post.save(update_fields=['total_weight_kg'])
+            mp_fee = round(mp_total * Decimal('0.10'), 2)
+            mp_payout = mp_total - mp_fee
+            mp_order = Order.objects.create(
+                customer=c2, status='pending',
+                total_paid=mp_total, platform_fee=mp_fee, farmer_payout=mp_payout,
+                delivery_address=c2.address or 'Savar, Dhaka',
+                advance_amount=round(mp_total / 2, 2),
+                final_amount=mp_total - round(mp_total / 2, 2),
+            )
+            for mp_post, mp_farmer, mp_qty in mp_items:
+                subtotal = round(mp_qty * mp_post.price_per_kg, 2)
+                OrderItem.objects.create(
+                    order=mp_order, post=mp_post, farmer=mp_farmer,
+                    quantity_kg=mp_qty, quantity_type=mp_post.quantity_type,
+                    est_weight_kg=mp_post.est_weight_kg,
+                    price_per_kg=mp_post.price_per_kg, subtotal=subtotal,
+                )
+            process_new_order(mp_order)
+        self.stdout.write(f"  Multi-product order #{mp_order.id}: Garlic + Cucumber + Chili = {mp_total} BDT (pending)")
+
         self.stdout.write("Creating reviews for completed orders...")
         Review.objects.create(customer=c1, post=p_potato, rating=5,
                               comment="Excellent Rajshahi potatoes — great value and quality.")
@@ -521,17 +566,30 @@ class Command(BaseCommand):
         self.stdout.write("Creating Jamal tomato orders + reviews (4 customers)...")
 
         def add_completed_tomato_order(customer, post, qty):
+            from api.models import OrderItem
             with transaction.atomic():
                 qty_dec = Decimal(str(qty))
                 total = round(qty_dec * Decimal(str(post.price_per_kg)), 2)
                 fee = round(total * Decimal('0.10'), 2)
                 payout = total - fee
-                return Order.objects.create(
-                    customer=customer, post=post, quantity_kg=qty_dec, status='completed',
+                advance = round(total / 2, 2)
+                final = total - advance
+                order = Order.objects.create(
+                    customer=customer, status='completed',
                     total_paid=total, platform_fee=fee, farmer_payout=payout,
                     delivery_address=customer.address or 'Dhaka',
                     delivered_at=timezone.now(),
+                    advance_amount=advance, final_amount=final,
+                    advance_paid=True, final_paid=True,
+                    paid_amount=total, paid_at=timezone.now(),
                 )
+                OrderItem.objects.create(
+                    order=order, post=post, farmer=post.farmer,
+                    quantity_kg=qty_dec, quantity_type=post.quantity_type,
+                    est_weight_kg=post.est_weight_kg,
+                    price_per_kg=post.price_per_kg, subtotal=total,
+                )
+                return order
 
         def add_tomato_review(customer, post, rating, comment, images):
             review = Review.objects.create(

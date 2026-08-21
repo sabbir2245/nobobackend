@@ -1,0 +1,12 @@
+this a server directory is a copy of a server . using mutagen im keeping a exact copy and syncing . 
+
+any changes you do will change in the server . 
+
+to run any commandd  in terminal you have to r ssh s@200.234.36.38  then run it . 
+
+
+the frontend of this project is located at  in) ✗ pwd
+/home/s/aproject/nobanno3/frontend
+➜  frontend git:(main) ✗   
+
+ask for permission to access fronend i will give you . 
